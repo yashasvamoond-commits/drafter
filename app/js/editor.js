@@ -39,12 +39,25 @@
     };
   }
 
+  /** Print/PDF sheet size follows the document's own page geometry. */
+  function applyPrintSize(dims) {
+    var st = document.getElementById("printPageStyle");
+    if (!st) {
+      st = document.createElement("style");
+      st.id = "printPageStyle";
+      document.head.appendChild(st);
+    }
+    st.textContent = "@media print{@page{size:" + dims.w.toFixed(1) + "mm " + dims.h.toFixed(1) + "mm;margin:0}" +
+      "body{background:#fff}#pages{zoom:1!important}}";
+  }
+
   function applyPageStyle() {
     var doc = S.doc;
     var dims = pageDims();
     var root = document.documentElement;
     var p = doc.page || {};
     var st = doc.style || {};
+    applyPrintSize(dims);
     root.style.setProperty("--page-w", dims.w + "mm");
     root.style.setProperty("--page-h", dims.h + "mm");
     root.style.setProperty("--pad-top", (dims.margins.top || 25.4) + "mm");

@@ -691,7 +691,7 @@ kbd {
   .page {
     box-shadow: none; margin: 0; border-radius: 0;
     break-after: page; page-break-after: always;
-    height: var(--page-h); overflow: hidden;
+    height: auto; min-height: var(--page-h); overflow: visible;
   }
   .page:last-child { break-after: auto; page-break-after: auto; }
   .blk:focus { background: none; }
@@ -747,3 +747,6 @@ body.show-marks .blk[data-type="pagebreak"]::after { content: "page break"; }
 /* watermark must never block selection */
 .watermark { z-index: 0; }
 .page-body, .page-header, .page-footer, .page-number { position: relative; z-index: 1; }
+.menu-note { font-size: 11px; color: var(--ink-3); }
+.find-row.secondary { margin-top: 6px; }
+.find-row.secondary .btn { flex: 0 0 auto; }
