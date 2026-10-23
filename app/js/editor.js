@@ -357,7 +357,12 @@
   E.insertBlock = function (type, html, afterId, align) {
     var b = D.newBlock(type || "p", html || "");
     if (align) b.align = align;
-    var idx = afterId ? state.doc.blocks.findIndex(function (x) { return x.id === afterId; }) : state.doc.blocks.length - 1;
+    var idx = state.doc.blocks.length - 1;
+    if (afterId) {
+      for (var i = 0; i < state.doc.blocks.length; i++) {
+        if (state.doc.blocks[i].id === afterId) { idx = i; break; }
+      }
+    }
     state.doc.blocks.splice(idx + 1, 0, b);
     renderPages();
     var el = pagesEl.querySelector('.blk[data-id="' + b.id + '"]');
@@ -446,7 +451,10 @@
     if (e.key === "Backspace") {
       if ((el.textContent || "").length === 0 && state.doc.blocks.length > 1) {
         e.preventDefault();
-        var idx = state.doc.blocks.findIndex(function (x) { return x.id === el.dataset.id; });
+        var idx = 0;
+        for (var k = 0; k < state.doc.blocks.length; k++) {
+          if (state.doc.blocks[k].id === el.dataset.id) { idx = k; break; }
+        }
         if (idx > 0) {
           var prevB = state.doc.blocks[idx - 1];
           E.pushUndo();
@@ -620,7 +628,10 @@
   }
 
   /* --------------------------------------------------------------- bootstrap */
+  var inited = false;
   E.init = function (doc) {
+    if (inited) { E.setDoc(doc); return; }
+    inited = true;
     pagesEl = document.getElementById("pages");
     canvasEl = document.getElementById("canvas");
     state.doc = doc;

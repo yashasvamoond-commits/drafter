@@ -248,7 +248,49 @@
   }
 
   var dbp = null;
-  function db() { return (dbp = dbp || openDB()); }
+  function db() {
+    if (dbp) return dbp;
+    dbp = openDB().catch(function (err) {
+      console.warn("IndexedDB unavailable, using localStorage fallback", err);
+      throw err;
+    });
+    return dbp;
+  }
+
+  /* --- localStorage fallback (some WebView builds disallow IDB on file://) --- */
+  var LS = {
+    key: function (id) { return "nd.doc." + id; },
+    index: function () {
+      try { return JSON.parse(localStorage.getItem("nd.docIndex") || "[]"); } catch (e) { return []; }
+    },
+    setIndex: function (arr) { try { localStorage.setItem("nd.docIndex", JSON.stringify(arr)); } catch (e) {} },
+    put: function (doc) {
+      try {
+        localStorage.setItem(LS.key(doc.id), JSON.stringify(doc));
+        var idx = LS.index();
+        if (idx.indexOf(doc.id) < 0) { idx.push(doc.id); LS.setIndex(idx); }
+        return Promise.resolve(doc.id);
+      } catch (e) { return Promise.reject(e); }
+    },
+    get: function (id) {
+      try { return Promise.resolve(JSON.parse(localStorage.getItem(LS.key(id)) || "null")); }
+      catch (e) { return Promise.resolve(null); }
+    },
+    all: function () {
+      return Promise.resolve(LS.index().map(function (id) {
+        try { return JSON.parse(localStorage.getItem(LS.key(id)) || "null"); } catch (e) { return null; }
+      }).filter(Boolean).sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); }));
+    },
+    del: function (id) {
+      try { localStorage.removeItem(LS.key(id)); LS.setIndex(LS.index().filter(function (x) { return x !== id; })); } catch (e) {}
+      return Promise.resolve();
+    },
+    kvSet: function (k, v) { try { localStorage.setItem("nd.kv." + k, JSON.stringify(v)); } catch (e) {} return Promise.resolve(); },
+    kvGet: function (k, d) {
+      try { var v = localStorage.getItem("nd.kv." + k); return Promise.resolve(v === null ? d : JSON.parse(v)); }
+      catch (e) { return Promise.resolve(d); }
+    }
+  };
 
   function tx(storeName, mode, fn) {
     return db().then(function (d) {
@@ -265,9 +307,15 @@
   }
 
   ND.store = {
-    put: function (doc) { return tx("docs", "readwrite", function (s) { s.put(doc); return doc.id; }); },
-    get: function (id) { return tx("docs", "readonly", function (s) { return s.get(id); }); },
-    all: function () {
+    put: function (doc) {
+      return tx("docs", "readwrite", function (s) { s.put(doc); return doc.id; })
+        .catch(function () { return LS.put(doc); });
+    },
+    get: function (id) {
+      return tx("docs", "readonly", function (s) { return s.get(id); })
+        .catch(function () { return LS.get(id); });
+    },
+    allRaw: function () {
       return tx("docs", "readonly", function (s) {
         var out = [], r = s.openCursor();
         r.onsuccess = function () {
@@ -279,11 +327,30 @@
         return (arr || []).sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
       });
     },
-    del: function (id) { return tx("docs", "readwrite", function (s) { s.delete(id); }); },
-    kvSet: function (k, v) { return tx("kv", "readwrite", function (s) { s.put(v, k); }); },
+    del: function (id) {
+      return tx("docs", "readwrite", function (s) { s.delete(id); })
+        .catch(function () { return LS.del(id); });
+    },
+    kvSet: function (k, v) {
+      return tx("kv", "readwrite", function (s) { s.put(v, k); })
+        .catch(function () { return LS.kvSet(k, v); });
+    },
     kvGet: function (k, dflt) {
-      return tx("kv", "readonly", function (s) { return s.get(k); }).then(function (v) { return v === undefined ? dflt : v; });
+      return tx("kv", "readonly", function (s) { return s.get(k); })
+        .then(function (v) { return v === undefined ? dflt : v; })
+        .catch(function () { return LS.kvGet(k, dflt); });
     }
+  };
+
+  // all(): prefer IndexedDB, fall back to localStorage
+  ND.store.all = function () {
+    return ND.store.allRaw().catch(function () {
+      return LS.all();
+    }).then(function (arr) {
+      arr = arr || [];
+      if (arr.length) return arr;
+      return LS.all().then(function (lsArr) { return (lsArr && lsArr.length) ? lsArr : arr; });
+    });
   };
 
   /* ---------------------------------------------------------------- settings */

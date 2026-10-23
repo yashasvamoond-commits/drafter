@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private WebView web;
     private final Map<String, ByteArrayOutputStream> pendingFiles = new HashMap<>();
     private ValueCallback<Uri[]> fileCallback;
-    private String pendingSaveName = null;
+    private Uri pendingOpenUri = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -81,6 +81,9 @@ public class MainActivity extends Activity {
         s.setDatabaseEnabled(true);
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
+        // fonts, scripts and the generated dictionaries are all local files
+        s.setAllowFileAccessFromFileURLs(true);
+        s.setAllowUniversalAccessFromFileURLs(true);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(false);
         s.setTextZoom(100);
@@ -111,6 +114,12 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 Log.i(TAG, "page loaded: " + url);
+                if (pendingOpenUri != null) {
+                    Uri u = pendingOpenUri;
+                    pendingOpenUri = null;
+                    // give the web app a moment to finish booting
+                    view.postDelayed(() -> deliverPickedFile(u), 1500);
+                }
             }
         });
 
@@ -124,8 +133,26 @@ public class MainActivity extends Activity {
             }
         });
 
+        handleOpenIntent(getIntent());
         web.loadUrl("file:///android_asset/index.html");
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+    }
+
+    /** "Open with NyayaLekh" from WPS Office, Files, Gmail… */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleOpenIntent(intent);
+    }
+
+    private void handleOpenIntent(Intent intent) {
+        if (intent == null) return;
+        Uri data = intent.getData();
+        if (data != null) { pendingOpenUri = data; return; }
+        if (Intent.ACTION_SEND.equals(intent.getAction())) {
+            Uri extra = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (extra != null) pendingOpenUri = extra;
+        }
     }
 
     /* ------------------------------------------------------------------ files */
