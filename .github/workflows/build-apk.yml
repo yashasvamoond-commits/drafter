@@ -70,6 +70,42 @@ jobs:
           cp android/app/build/outputs/apk/debug/app-debug.apk out/NyayaLekh-1.0.0.apk
           ls -lh out
 
+      - name: Verify APK contents
+        run: |
+          python3 - <<'PY'
+          import zipfile, sys
+          apk = "out/NyayaLekh-1.0.0.apk"
+          z = zipfile.ZipFile(apk)
+          names = set(z.namelist())
+          required = [
+            "AndroidManifest.xml",
+            "assets/index.html",
+            "assets/css/app.css",
+            "assets/js/app.js",
+            "assets/js/editor.js",
+            "assets/js/doc.js",
+            "assets/js/dict.js",
+            "assets/js/text.js",
+            "assets/js/kd-table.js",
+            "assets/data/legal.js",
+            "assets/data/hi-words.js",
+            "assets/data/hi-dict.js",
+            "assets/data/en-words.js",
+            "assets/vendor/fonts/serif-400.woff2",
+            "assets/vendor/fonts/sans-700.woff2",
+            "assets/vendor/fonts/tiro-400.woff2",
+            "assets/vendor/jszip.min.js",
+          ]
+          missing = [r for r in required if r not in names]
+          print(f"APK size: {z.fp.seek(0, 2) or 0}")
+          for r in required:
+              if r in names:
+                  print(f"  OK  {r:45s} {z.getinfo(r).file_size:>9,} bytes")
+          if missing:
+              print("MISSING:", missing); sys.exit(1)
+          print(f"\nAll {len(required)} required assets present.")
+          PY
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
