@@ -1,0 +1,14 @@
+{
+  "name": "nyayalekh-data-builder",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Builds the Hindi/English offline dictionaries used by the NyayaLekh app.",
+  "scripts": {
+    "build": "node build-data.mjs"
+  },
+  "dependencies": {
+    "an-array-of-english-words": "2.0.0",
+    "wordnet-hi": "0.0.1"
+  }
+}

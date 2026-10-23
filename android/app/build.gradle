@@ -1,0 +1,56 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.nyayalekh.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.nyayalekh.app"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+        resConfigs "hi", "en"
+    }
+
+    // The entire drafting UI is plain HTML/CSS/JS and is shipped untouched as
+    // assets, so the web preview and the APK always behave identically.
+    sourceSets {
+        main {
+            assets.srcDirs = ["../../app"]
+            assets.exclude '**/*.map'
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ""
+            versionNameSuffix ""
+        }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.debug   // self-signed, installable
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    packagingOptions {
+        resources.excludes += ["META-INF/*", "**/*.kotlin_metadata"]
+    }
+}
+
+dependencies {
+    // deliberately none: the app is a plain WebView shell with zero libraries
+}

@@ -1,0 +1,23 @@
+# web/desktop
+node_modules/
+scripts/node_modules/
+scripts/package-lock.json
+
+# generated dictionary data (built by scripts/build-data.mjs)
+app/data/hi-words.js
+app/data/hi-dict.js
+app/data/en-words.js
+
+# android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.apk
+*.aab
+*.iml
+
+# os
+.DS_Store
+Thumbs.db
