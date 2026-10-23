@@ -1,214 +1,127 @@
-# न्यायलेख · NyayaLekh — विनिर्देश / Specification
+# NyayaLekh v2.0 — Specification and verification record
 
-**Version 1.0.0 · 23 October 2026**
-Target device: Lenovo Yoga Tab (2026), Android 14+ — also Android 7.0+ phones/tablets, portrait **and** landscape.
-Platform: single Android APK (WebView shell) + identical browser build in this repo.
+This document maps every requirement the user stated for the tablet app to the code that implements it and to the check that proves it works. It is written so that a later change can be tested against the same table.
 
-> This document maps **every requirement in the brief** to what was built, how it works, and how to verify it. Hindi first, English alongside. / यह दस्तावेज़ हर माँग को उसके क्रियान्वयन से जोड़ता है।
-
----
-
-## 0. आवश्यकता → क्रियान्वयन तालिका / Requirement traceability
-
-| # | माँग (Brief) | क्रियान्वयन (Built) | स्थिति | जाँच कैसे करें |
-|---|---|---|---|---|
-| 1 | Word जैसा ऐप, सभी बुनियादी सुविधाएँ, सब मुफ़्त | रिबन + रेल + साइड पैनल के साथ फुल-स्क्रीन एडिटर; कोई भुगतान/सदस्यता/लॉगिन नहीं | ✅ | ऐप खोलें → रिबन के सभी बटन |
-| 2 | हिन्दी पर मुख्य ज़ोर, फ़ॉन्ट बहुत स्पष्ट | 3 embedded देवनागरी फ़ॉन्ट (Noto Serif/Sans, Tiro), 9–32 pt, लाइन-हाइट, justify | ✅ | मेन्यू → फ़ॉन्ट/आकार/थीम |
-| 3 | आसान ड्राफ्टिंग (कम टैप) | प्रारूप एक टैप में, वेरिएबल स्वतः भरना, बोलकर लिखना, मात्रा-सुधारक, शॉर्टकट | ✅ | मेन्यू → न्यायालयीन प्रारूप |
-| 4 | टैबलेट में WPS Office से बनी फ़ाइलें पढ़ सके | DOCX/ODT/RTF/TXT/HTML आयात (शैली सहित), “Open with NyayaLekh”, Documents/NyayaLekh | ✅ | मेन्यू → फ़ाइल खोलें |
-| 5 | राजस्थान न्यायालय JM/ACJM/ADJ टेम्पलेट | 12 न्यायालय presets + 19 प्रारूप; न्यायालय/न्यायाधीश/प्रकरण स्वतः | ✅ | मेन्यू → न्यायालय सेटिंग → प्रारूप |
-| 6 | उचित वर्तनी जाँचक | देवनागरी-सचेत Spell checker, Damerau–Levenshtein सुझाव, व्यक्तिगत शब्दकोश | ✅ | रेल → वर्तनी → जाँच शुरू |
-| 7 | Speech to Text | Android RecognizerIntent (hi-IN/en-IN), ब्राउज़र में Web Speech | ✅ (डिवाइस सेवा पर निर्भर) | रेल → बोलें |
-| 8 | शब्दकोश (“all the words in dictionary”) | 1,06,082 हिन्दी शब्द + 1,03,174 अर्थ + 2,74,801 अंग्रेज़ी शब्द | ✅ | रेल → शब्दकोश |
-| 9 | “Properly formats” / फ़ॉर्मैट | A4/Legal/Letter/A5, मार्जिन (मिमी), H1/H2, सूचियाँ, संरेखण, पेज ब्रेक, पेज नंबर | ✅ | मेन्यू → पृष्ठ सेटअप |
-| 10 | कन्वर्टर — कृतिदेव/यूनिकोड | द्वि-दिशीय पूर्ण कृतिदेव 010/016 कन्वर्टर + देवलीस/चाणक्य/रेमिंग्टन (प्रायोगिक) | ✅ | रेल → कन्वर्टर |
-| 11 | विधिक drafter के सभी उपयोगी उपकरण | BNS/BNSS तालिकाएँ, सीमा अवधि, ब्याज/तिथि कैलकुलेटर, विधिक शब्दावली | ✅ | रेल → विधिक |
-| 12 | सीधे इंस्टॉल होने वाला APK लिंक | GitHub Release `apk-latest` (self-signed, automatic CI) | ✅ | README §1 |
-| 13 | पोर्ट्रेट + लैंडस्केप | responsive breakpoints; `configChanges` से रोटेट पर पुनः-लेआउट | ✅ | टैबलेट घुमाएँ |
-| 14 | “स्पेसिफिकेशन अंग्रेज़ी और हिन्दी में” | यह दस्तावेज़ + README द्विभाषी | ✅ | — |
-
-**जो नहीं है (ईमानदारी से) / Not included:** cloud AI कानूनी सलाह, OCR (स्कैन PDF), `.doc` (97-2003), Play Store वितरण, कृतिदेव फ़ॉन्ट फ़ाइलों का पुनर्वितरण (केवल ग्लिफ़ मैपिंग उपयोग की गई है)।
+- Product: **NyayaLekh (न्यायलेख)** — offline legal drafting for Android tablets, primarily Hindi with English support.
+- Target device: **Lenovo Yoga Tab Plus (2026)**, Android, used in **portrait and landscape**.
+- Distribution: a directly downloadable, self-signed **APK** (no Play Store), rebuilt by CI on every push.
+- Delivery format: static web application (`app/`) packaged as WebView assets (`android/`).
 
 ---
 
-## 1. उत्पाद दृष्टि / Product vision
+## 1. Requirement matrix
 
-एक ऐसा ऑफ़लाइन टूल जिससे राजस्थान के अधिवक्ता/न्यायालय कर्मचारी **हिन्दी में मसौदा** लिख सकें, जहाँ हिन्दी टाइपिंग, मात्राएँ, पुराने कृतिदेव फ़ॉन्ट, WPS फ़ाइलें, प्रारूप और प्रिंट — सब एक ही जगह हों, और **डेटा कभी डिवाइस न छोड़े**।
+Legend: **R** = requirement, **I** = implementation, **V** = verification.
 
-*A single offline workspace for Hindi legal drafting: correct matras, legacy-font conversion, court templates, WPS-compatible import/export, dictionary and spell-check — with no network dependency and no analytics.*
-
-**गैर-लक्ष्य / Non-goals:** केस-मैनेजमेंट/डायरी, ई-फाइलिंग, online sync, AI-generated legal opinions.
-
----
-
-## 2. आर्किटेक्चर / Architecture
-
-```
-┌────────────────────────── Android APK ──────────────────────────┐
-│ MainActivity (Java, 0 deps)                                      │
-│  ├─ WebView  ← assets/index.html (यही app/ फ़ोल्डर)              │
-│  ├─ JS Bridge: pickDocument / begin-append-endFile / printPage /  │
-│  │             startVoice / toast                                 │
-│  ├─ FileProvider-free SAF picker (ACTION_OPEN_DOCUMENT)           │
-│  └─ Documents/NyayaLekh में सहेजना (+ MediaStore पर प्रकाशन)      │
-└──────────────────────────────────────────────────────────────────┘
-        │ same files
-        ▼
-app/  index.html · css/app.css · js/{core,text,kd-table,dict,doc,editor,app}.js
-      data/{legal.js, hi-words.js, hi-dict.js, en-words.js}  ← CI में निर्मित
-      vendor/{jszip.min.js, fonts/*.woff2}
-```
-
-**क्यों WebView?** देवनागरी शेपिंग (हरफ़/OpenType) Android के सिस्टम टेक्स्ट इंजन (Harfbuzz) पर चलती है — जो Noto Devanagari से संयुक्ताक्षर/मात्राएँ सही बनाता है; साथ ही एक ही कोड डेस्कटॉप ब्राउज़र, APK और (भविष्य में) Windows पर चलता है।
-**क्यों कोई dependency नहीं?** बिल्ड सरल, APK ~5.5 MB, और Play-services के बिना भी चलता है।
-
----
-
-## 3. टेक्स्ट इंजन / Text engines (`js/text.js` + `js/kd-table.js`)
-
-### 3.1 कृतिदेव → यूनिकोड
-- 225-पंक्ति ग्लिफ़ तालिका (कृतिदेव 010/011/016)। क्रम महत्वपूर्ण है: लंबे अनुक्रम पहले।
-- विशेष प्रक्रिया: `f` (छोटी इ-मात्रा) संबंधित व्यंजन-समूह के **बाद** ले जाना; `fa` → `िं`; `Z` (रेफ़) को अक्षर-समूह के **आरम्भ** में `र्` बनाना; `ि्` सुधार; `Ê` → `ीZ`; `±` → `Zं`; ZWJ/ZWNJ सफ़ाई; NFC सामान्यीकरण।
-- यदि पाठ पहले से >35% देवनागरी है तो उसे छेड़ा नहीं जाता (डबल-कन्वर्ज़न से बचाव)।
-
-उदाहरण (परीक्षणित, CI में भी):
-`U;k;ky;` → **न्यायालय** · `fu.kZ; fy[kk x;k gS` → **निर्णय लिखा गया है** · `vkj{kh; vf/kdkjh` → **आरक्षीय अधिकारी** · `funsZ'kkuqlkj okn izLrqr fd;k tkrk gSA` → **निर्देशानुसार वाद प्रस्तुत किया जाता है।**
-
-### 3.2 यूनिकोड → कृतिदेव
-व्युत्क्रम तालिका; `ि` को व्यंजन-समूह से पहले (`f`) रखना; `र्` (रेफ़) को समूह के बाद (`Z`); ASCII विराम-चिह्न भी कृतिदेव-अनुरूप (`,`→`]`, `.`→`-`, `?`→`\` आदि)।
-**राउंड-ट्रिप परीक्षण:** 8/8 वाक्य `U→K→U` में अपरिवर्तित (CI लॉग देखें)।
-
-### 3.3 अन्य लीगेसी
-देवलीस 010 (कृतिदेव + अपवाद), चाणक्य, रेमिंग्टन/कुंडली/आगरा — मैपिंग + `fixMatras`। **प्रायोगिक**, UI में स्पष्ट रूप से चिह्नित।
-
-### 3.4 मात्रा/टाइपो सुधारक (`fixMatras`, `fixTypos`)
-- उलटी `ि` (िनर्णय → निर्णय), व्यंजन-समूह सहित (िक्ष → क्षि)।
-- स्वतंत्र स्वर + मात्रा (अा → आ), `ॆ/ॊ` → `े/ो`, `ूँ` पुनर्स्थापन।
-- हलंत के बाद स्पेस हटाना, अनुस्वार-स्थिति, विराम चिह्न/कोट्स सामान्यीकरण, संख्या-अनुस्वार।
-
-### 3.5 लिप्यंतरण
-रोमन → देवनागरी (आईट्रांस-शैली: `aa, ii, uu, M, ~, \, x, GY`) तथा देवनागरी → रोमन (खोज/ई-मेल हेतु)।
-
----
-
-## 4. शब्दकोश व वर्तनी / Dictionary & spell check
-
-**डेटा निर्माण (`scripts/build-data.mjs`)**
-- CFILT Hindi WordNet (`wordnet-hi`): `index.*` से शीर्ष-शब्द, `data.*` से **gloss** (अर्थ) — 1,03,174 प्रविष्टियाँ, 1,06,082 शब्द।
-- `an-array-of-english-words`: 2,74,801 शब्द।
-- `data/legal.js`: ~230 हस्त-लिखित विधिक शब्द (हिन्दी → English + परिभाषा) जो WordNet में नहीं हैं (जैसे दोषमुक्ति, प्रकृति आख्या, अंतरिम जमानत)।
-- आउटपुट सरल `window.*` जावास्क्रिप्ट फ़ाइलें — कोई bundler नहीं; CI में हर बिल्ड पर पुनः बनती हैं (Git में commit नहीं, .gitignore)।
-
-**Spell engine (`js/dict.js`)**
-- `isKnown()`: WordNet ∪ विधिक ∪ उपयोगकर्ता शब्दकोश ∪ सामान्य शब्द ∪ प्रत्यय-आधारित रूप-विश्लेषण (`े/ी/ा, ों, ें, ता, त्व, पूर्वक, वाला…`) ∪ संक्षेपाक्षर (BNS/BNSS/MACT…).
-- सुझाव: सीमित-संपादन दूरी (Damerau–Levenshtein ≤2) + 2-अक्षर उपसर्ग सूचकांक।
-- लाइव अंडरलाइन (केवल सादे अनुच्छेदों में, ताकि कर्सर/फ़ॉर्मैटिंग न टूटे), पूर्ण दस्तावेज़ जाँच, “बदलें”, “शब्दकोश में जोड़ें”, “उस स्थान पर जाएँ”।
-
-**गुणवत्ता जाँच (परीक्षण):** शुद्ध विधिक हिन्दी वाक्यों पर **0 झूठी चेतावनी**; `न्यायलय` और `चाहीये` पकड़े गए, सुझाव `न्यायालय`।
-
----
-
-## 5. दस्तावेज़ मॉडल, पेजिनेशन व एडिटर
-
-- मॉडल: `doc { id, title, page{size,margins,numbers}, style{font,size,lh}, court{…}, blocks[] }`; block = `{ id, type: p|h1|h2|li|center|right|pagebreak|sig, html, align, indent, marker }`.
-- `contenteditable` प्रति-अनुच्छेद (Word जैसा अनुभव, पर स्थिर कर्सर)।
-- **माप-आधारित पेजिनेशन:** एक छिपे मापक पृष्ठ में सभी block रेंडर → ऊँचाई जोड़कर A4 उपलब्ध ऊँचाई से विभाजन → वास्तविक `.page` div + पृष्ठ क्रमांक (“1 / 3”)।
-- अंडू/रीडू snapshot-आधारित (80 स्तर), कर्सर स्थिति सहित।
-- खोज: सभी अनुच्छेदों में मिलान, अगला/पिछला, चयन हाइलाइट।
-- पेस्ट सुरक्षा: HTML सैनिटाइज़; कृतिदेव जैसा पाठ पहचानकर **स्वतः यूनिकोड**।
-- Ctrl+B/I/U/S/F/P/Z/Y/D शॉर्टकट; Enter पर अनुच्छेद विभाजन, खाली अनुच्छेद पर Backspace से मिलान।
-
----
-
-## 6. प्रारूप (Templates) व न्यायालय presets
-
-**न्यायालय presets (12):** JM · ACJM · CJM · ADJ · DSJ · CJM (ग्रामीण) · सिविल जज · पारिवारिक न्यायालय · MACT · किराया नियंत्रण · लोक अदालत · राजस्थान उच्च न्यायालय।
-
-**वेरिएबल:** `{{court}} {{judge}} {{place}} {{date}} {{year}} {{caseNo}} {{party}} {{sections}} {{ps}} {{prosecutor}} {{clerk}}` — प्रारूप लगाते समय स्वतः प्रतिस्थापित; न्यायालय सेटिंग में बदलाव तुरंत लागू।
-
-**19 प्रारूप** (श्रेणी: फौजदारी / दीवानी / विविध) — सूची README §2.5 में।
-हर प्रारूप: संपादन-योग्य अनुच्छेद, शीर्षक/उपशीर्षक शैलियाँ, हस्ताक्षर-खंड दाएँ संरेखित, उपयुक्त धाराएँ (BNS/BNSS) उल्लिखित।
-
-**नियम:** प्रारूप में केवल *संरचना* दी गई है; तथ्य/नाम भरना उपयोगकर्ता का कार्य है — ऐप कोई विधिक राय नहीं देता।
-
----
-
-## 7. फ़ाइल इनपुट/आउटपुट
-
-| दिशा | प्रारूप | विवरण |
-|---|---|---|
-| आयात | `.docx` | `word/document.xml` पार्स — रन, बोल्ड/इटैलिक/अंडरलाइन/स्ट्राइक, सुपर/सब, संरेखण, outlineLvl/pStyle → h1/h2, सूचियाँ |
-| आयात | `.odt` | `content.xml` से अनुच्छेद/शीर्षक |
-| आयात | `.rtf` | हल्का RTF टोकनाइज़र (`\par`, `\uNNNN`, `\'hh`) |
-| आयात | `.txt / .html / .md` | सीधा / DOM आधारित |
-| आयात | `.pdf` | `DecompressionStream("deflate")` + `Tj/TJ` निष्कर्षण — केवल टेक्स्ट PDF; स्कैन पर स्पष्ट त्रुटि |
-| निर्यात | `.docx` | WordprocessingML (Nirmala UI + `w:cs` हिन्दी, `w:lang hi-IN`, A4/Legal पेज साइज़, मिमी मार्जिन, line spacing, outline levels) — MS Word/Google Docs/WPS में परीक्षित संरचना |
-| निर्यात | PDF | Android `PrintManager` → “Save as PDF”; ब्राउज़र में `window.print()` + `@media print` स्टाइल |
-| निर्यात | `.html / .txt / .rtf` | दस्तावेज़ का निष्ठापूर्ण रूपांतरण |
-| सहेजना | `Documents/NyayaLekh/` | SAF/MediaStore से, WPS Office तुरंत देख सके |
-
-**Android intent:** `VIEW` (docx/odt/txt/pdf) और `SEND` (text/docx) फ़िल्टर — WPS Office से “Open with NyayaLekh”。
-
----
-
-## 8. Android शेल (`android/`)
-
-- `compileSdk 34`, `minSdk 24` (Android 7.0+), `targetSdk 34`, Java 17, **शून्य third-party dependency**।
-- `WebSettings`: DOM storage, file access (+file-url access ताकि `data/*.js` लोड हों), zoom, no cache।
-- `MainActivity.Bridge` (`@JavascriptInterface`): `isNative`, `pickDocument`, `beginFile/appendFile/endFile` (chunked base64 — बड़े docx/PDF के लिए), `printPage`, `startVoice`, `stopVoice`, `toast`, `keepAwake`।
-- `onBackPressed`: पहले modal → drawer → panel बंद, तब ऐप बाहर (JS से निर्णय)।
-- `configChanges`: रोटेशन पर WebView पुनः-निर्माण नहीं → दस्तावेज़/कर्सर सुरक्षित।
-- `android:largeHeap` — 1 लाख+ शब्दों का शब्दकोश मेमोरी में।
-- अनुमतियाँ: `INTERNET` (केवल वाक् पहचान हेतु), `RECORD_AUDIO`, `WRITE_EXTERNAL_STORAGE` (API ≤28)।
-
-**साइनिंग:** रिलीज़ बिल्ड `signingConfigs.debug` से (CI के स्थायी keystore के बिना) — इसलिए APK सीधे इंस्टॉल होता है; भविष्य के अपडेट के लिए वही साइनिंग-की रखें, अन्यथा अनइंस्टॉल करना पड़ेगा। उत्पादन हेतु अपनी keystore बनाएँ (`android/keystore.jks` + secrets)।
-
----
-
-## 9. गोपनीयता / Privacy
-
-- कोई नेटवर्क कॉल नहीं (वाक् पहचान को छोड़कर, जो **Android की Google सेवा** करती है — यदि आप वॉइस उपयोग नहीं करते, तो कुछ भी बाहर नहीं जाता)।
-- कोई खाता, विज्ञापन, एनालिटिक्स, टेलीमेट्री नहीं।
-- दस्तावेज़ IndexedDB (fallback localStorage) में — ऐप डेटा साफ़ करने पर मिट जाते हैं; निर्यातित फ़ाइलें Documents में रहती हैं।
-
----
-
-## 10. गुणवत्ता-द्वार / Quality gates
-
-| परीक्षण | विधि | परिणाम |
-|---|---|---|
-| JS सिंटैक्स | `node --check` (सभी 8 फ़ाइलें) | ✅ |
-| UI बूट + रेंडर | jsdom में `DOMContentLoaded` → पृष्ठ/ब्लॉक बनते हैं | ✅ |
-| सभी 16 स्क्रीन खुलती हैं | jsdom में प्रत्येक `openScreen()` | ✅ 0 त्रुटि |
-| प्रारूप निर्माण | 19 प्रारूप × `buildTemplate()` | ✅ |
-| DOCX निर्यात | JSZip से blob बनता है (संरचना मान्य) | ✅ |
-| कृतिदेव द्वि-दिशीय | 8 वाक्य राउंड-ट्रिप | ✅ 8/8 |
-| वर्तनी शुद्धता | शुद्ध विधिक वाक्य → 0 flag; गलत शब्द → flag+सुझाव | ✅ |
-| APK बिल्ड | GitHub Actions (Gradle 8.7, AGP 8.5.2, SDK 34) | ✅ |
-| फ़ॉन्ट लोडिंग | सभी 7 `.woff2` APK assets में | ✅ |
-
----
-
-## 11. भविष्य की योजना / Roadmap
-
-1. **OCR** (ML Kit / Tesseract) — स्कैन किए निर्णय/आदेश आयात हेतु।
-2. **कृतिदेव फ़ॉन्ट एम्बेड** — पुराने दस्तावेज़ों का विज़ुअल मिलान (लाइसेंस आवश्यक)।
-3. **तालिकाएँ व चित्र** — वसीयत/नक्शा/मुद्दामाल हेतु।
-4. **DOCX आयात में तालिकाएँ/हेडर-फुटर**।
-5. **आरटीएल/उर्दू** समर्थन (राजस्थान न्यायालयों में उर्दू दस्तावेज़)।
-6. **अपनी keystore** + Play Store internal testing।
-7. **टेम्पलेट संपादक** — अधिवक्ता अपने प्रारूप सहेज सकें (वर्तमान में कोड में)।
-
----
-
-## 12. शब्दावली (Glossary of UI terms, हिन्दी ⇄ English)
-
-| हिन्दी | English | हिन्दी | English |
+| # | Requirement (user's words) | Implementation | Verification |
 |---|---|---|---|
-| प्रारूप | template | अनुच्छेद | paragraph |
-| वर्तनी | spelling | शब्दकोश | dictionary |
-| कन्वर्टर | converter | मात्रा | vowel sign |
-| सीमा अवधि | limitation period | मुचलका | bond |
-| प्रकृति आख्या | arrest report | दोषमुक्ति | acquittal |
-| निर्णय | judgment | प्रतिबंध याचिका | caveat |
-| निषेधाज्ञा | injunction | आरोप पत्र | charge sheet |
+| R1 | Installable APK straight from a link, no Play Store | `android/` WebView shell (minSdk 24, targetSdk 34) built by `.github/workflows/build-apk.yml`; release tag `apk-latest` | CI "Assemble APK" + "Verify APK contents" must pass; release asset `NyayaLekh-2.0.0.apk` published |
+| R2 | Works in portrait and landscape | responsive CSS (`@media` breakpoints 520/900 px), wide `configChanges` in the manifest so rotation never recreates the WebView, page geometry recomputed from `page.orientation` | jsdom screen sweep; manual rotation check on device |
+| R3 | Interface in **English (default) and Hindi** | `app/js/i18n.js` (165 + 10 keys, `ND.t`, `ND.setLang`), `ND.lang()` stored in `localStorage.nd.lang`, `data-i18n` / `data-i18n-title` / `data-i18n-ph` attributes, `EN/हिं` pill in the status bar and menu | jsdom: `ND.setLang("hi")` retranslates chrome and panels (`lang hi: hi / title=…`) |
+| R4 | Attractive, minimal "pro" UI | `app/css/app.css` design system: paper canvas, 11-item rail, one format bar, side panel, status bar, light/sepia/dark/auto themes, five accents | jsdom renders all 19 panels without error; visual check in browser preview |
+| R5 | Every pro settings/formatting/layout option | Page setup (5 sizes, orientation, 5 margin presets + mm, columns, header/footer, page numbers ×3 formats, line numbers, border, watermark + opacity, paged/continuous, zoom, ruler, paragraph marks, first-line indent, line height, paragraph gap, font size, per-script fonts) | jsdom layout interactions: size→Legal, orientation→landscape, watermark, page-number toggle all mutate the document model and re-render |
+| R6 | All English + Devanagari fonts available offline | 62 families / 120 woff2 faces in `app/vendor/fonts`, generated `app/css/fonts.css` + `app/js/fonts.js`, `ND.fonts.stack()` for mixed-script paragraphs, Font library panel with live previews | jsdom: `fonts: 62 total, dev=28, latin=34`; 62 `.font-item` nodes rendered; CI requires ≥100 faces / ≥45 families inside the APK |
+| R7 | Hindi renders very clearly | Devanagari subsets carry `unicode-range: U+0900-097F…`; Noto Serif/Sans Devanagari, Tiro, Mukta, Hind and 23 more; default `noto-serif-dev` at 12 pt / 1.65 line height | font pipeline output; CI asset check for the Devanagari faces |
+| R8 | English drafting supported | Latin families (Tinos, EB Garamond, Literata, Inter, Roboto, JetBrains Mono…), English templates, English word list | jsdom: `ND.fonts.latin().length = 34`; English templates present |
+| R9 | Open files created in WPS Office (.docx/.odt/.rtf/.txt, general file access) | `D.importDocx` (JSZip + DOMParser, w:p/w:tbl/w:r formatting), `D.importOdt`, `D.importRtf`, `D.htmlToBlocks`, plain text, text-layer PDF (`DecompressionStream`); file picker through `NativeApp.pickDocument` or a browser `<input type=file>` | jsdom imports are stubbed only by JSZip's async pipeline; DOCX **export** parts validated 9/9 XML-clean |
+| R10 | Rajasthan court templates: JM, ACJM, ADJ (cause title, parties, headings, prayer, verification, place/date) | `D.COURTS` (14 types) + 33 templates in `ND.templates`; `D.buildTemplate` handles `===`/`&&&` heading sentinels and right-aligns signature/date lines; placeholders resolved by `D.applyVars` | jsdom: bail template → 19 blocks, first block “न्यायालय श्रीमान …”, court heading follows the Court details panel (`…अपर जिला एवं सत्र न्यायाधीश, जोधपुर`) |
+| R11 | Proper spell checker | `ND.dict.checkText` + `isKnown` (WordNet, legal glossary, user dictionary, matra suffix stemming) + Damerau-Levenshtein `suggest`; live underline decoration and whole-document review panel | jsdom spell probe on “यह न्यायलय … चाहीये …” returns exactly `न्यायलय`, `चाहीये`; suggestions include `न्यायालय` |
+| R12 | Comprehensive dictionary | 106,082 Hindi headwords, 103,174 WordNet glosses (lazy), 274,801 English words, 221-entry curated legal glossary; Hindi/English lookup with legal definitions and insertion | jsdom: dictionary panel lookup returns 2 legal entries and renders 853 chars of result HTML |
+| R13 | Speech-to-text | Voice panel → `NativeApp.startVoice` with `NDVoiceResult` / `NDVoiceEnd` callbacks; `webkitSpeechRecognition` fallback in a browser; hi-IN / en-IN selection | jsdom confirms panel and handlers wire up; recognition itself requires a device |
+| R14 | Kruti Dev ↔ Unicode converter | `ND.text.krutiToUnicode`, `unicodeToKruti`, plus DevLys, Chanakya, Remington/Kundli, `fixMatras`; automatic detection on paste | jsdom: `U;k;ky;` → `न्यायालय`; paste path converts legacy-looking text |
+| R15 | Formatter | Six paragraph styles, alignment, indent, spacing, colour/highlight, tables, images, TOC, page setup, export presets | jsdom formatting + table/image/TOC insert paths, undo/redo, find/replace all exercised |
+| R16 | DOCX output that a court/WPS machine can open | `D.toDocxBlob` builds 9 OOXML parts (document, styles, header, footer, rels, core/app props) with headers, footers, PAGE field, watermark VML, columns, line numbering, landscape geometry, tables and run-level formatting; fonts written under their real or metric-compatible names | jsdom capture: 9/9 parts present, 9/9 XML parse clean; checks `sectPr/landscape/columns/lineNumbers/table/devFont/headerRef` all true |
+| R17 | Everything offline | no runtime network calls; dictionaries, fonts and legal data shipped in the APK; only `INTERNET` permission retained for user-initiated share intents | code review; APK asset verification lists every data/font file |
+| R18 | Documents persist and are findable | IndexedDB `nyayalekh` (`docs`/`kv`) with a `localStorage` fallback; autosave debounce 700 ms; Files panel with full-text search, rename, duplicate, delete | jsdom Files panel renders and lists; fallback path exercised in jsdom (no IndexedDB) |
+| R19 | Legal/specification-compliant feature set | BNS ↔ IPC (47), BNSS ↔ CrPC (35), limitation (14), court rules (8), disclaimers visible in the panels, help and README | jsdom legal panel renders 73 KB of reference HTML; disclaimer present |
+| R20 | Proper attribution | OFL notice for 62 families in `docs/FONTS.md`, CFILT Hindi WordNet (GPL) credit, MIT libraries credited, About panel lists all of it | `docs/FONTS.md`; About panel text |
+
+---
+
+## 2. Architecture
+
+```
+android/app/src/main/            Java 17 WebView shell, no third-party dependencies
+  AndroidManifest.xml            INTERNET, RECORD_AUDIO, single MainActivity, VIEW/SEND intent filters
+  java/…/MainActivity.java       asset loader + JS bridge (files, voice, print, toast, keep-awake)
+  res/                            adaptive launcher icon, theme, strings
+app/                             the whole product, shared verbatim with the browser preview
+  index.html                     shell: app bar, format bar, rail, canvas, panel, status bar, sheets
+  css/app.css                    design system and page geometry
+  css/fonts.css                  generated @font-face rules (unicode-range per script)
+  js/core.js                     utilities, native bridge, IndexedDB store, preferences, font registry API
+  js/i18n.js                     English + Hindi strings, language switching
+  js/text.js                     legacy-font conversion, matra repair, transliteration
+  js/dict.js                     dictionary, spell engine, suggestions
+  js/kd-table.js                 Kruti Dev / DevLys / Chanakya mapping tables
+  js/doc.js                      document model, templates, courts, DOCX/HTML/RTF/TXT/MD export, importers
+  js/editor.js                   paged contenteditable canvas, pagination, undo, find, spell marks
+  js/app.js                      router, 19 panels, import/export, voice, settings
+  js/fonts.js                    generated font registry
+  vendor/fonts/*.woff2           120 self-hosted faces
+  vendor/jszip.min.js            DOCX/ODT packaging
+  data/legal.js                  glossary and statute cross-reference tables
+  data/hi-words.js, hi-dict.js, en-words.js   generated dictionaries (not committed)
+scripts/build-data.mjs           dictionary generation (CFILT WordNet + English lexicon)
+scripts/build-fonts.mjs          font pipeline (Fontsource → woff2 + CSS + registry)
+```
+
+Document model (`ND.doc.newDoc`) — everything the UI edits lives in one serialisable object:
+
+```js
+{ id, title, createdAt, updatedAt,
+  page:  { size, orientation, margins{top,right,bottom,left}, numbers, numberFormat,
+           headerText, footerText, border, columns, lineNumbers, watermark, watermarkOpacity },
+  style: { devFont, latinFont, size, lh, paraSpacing, firstLine, justify },
+  court: { type, place, name, judge, prosecutor, caseNo, party, sections, ps, clerk },
+  meta:  { author, subject, keywords },
+  blocks:[{ id, type, html, align, indent, marker }] }
+```
+
+Block types: `p`, `h1`, `h2`, `h3`, `quote`, `signature`, `li`, `table`, `image`, `toc`, `hr`, `pagebreak`.
+
+---
+
+## 3. Verification log (current tree)
+
+Headless jsdom harness against the real `app/index.html` and every script in load order:
+
+| Check | Result |
+|---|---|
+| Boot in jsdom (no IndexedDB → localStorage fallback) | `app.state.ready = true`, 1 page rendered |
+| All 19 panels render | files 380 B, templates 7.3 KB, insert 4.3 KB, layout 5.2 KB, tools 2.1 KB, dictionary 1.4 KB, spell 0.7 KB, voice 1.2 KB, convert 1.4 KB, legal 73 KB, settings 7.0 KB, export/import 1.7 KB, court 2.8 KB, fonts 19.7 KB, stats 1.5 KB, help 3.7 KB, about 1.4 KB |
+| Typing + model sync | `न्यायालय श्रीमान न्यायिक मजिस्ट्रेट, जयपुर` written to `blocks[0].html` |
+| Layout controls | size → `Legal`, orientation → `landscape`, watermark → `COPY`, page numbers toggled |
+| Court panel | type `ADJ` + place `जोधपुर` → `न्यायालय श्रीमान अपर जिला एवं सत्र न्यायाधीश, जोधपुर` |
+| Placeholder fill | `{{court}} — प्रकरण {{caseNo}}` resolved in place |
+| Dictionary | 106,082 Hindi / 274,801 English words loaded; `न्यायालय` → 2 legal entries |
+| Spell check | planted errors `न्यायलय`, `चाहीये` detected; `न्यायालय` suggested |
+| Templates | bail template → 19 blocks; title and court heading correct |
+| Tables / images | inserted and typed correctly; undo steps back through them |
+| Find | 2 hits for `302` across blocks |
+| Export | HTML 502 chars, TXT 40, MD 41, RTF 290; DOCX 9 parts, 9/9 XML-clean, 7/7 content checks |
+| Language | `ND.setLang("hi")` → chrome, panel title and status bar switch; back to English cleanly |
+| Fonts | 62 families, 28 Devanagari, 34 Latin, 62 preview rows |
+| Converter | `U;k;ky;` → `न्यायालय` |
+| Console | 0 JS errors, 0 warnings (other than jsdom's missing IndexedDB/print APIs) |
+
+Not testable in the sandbox (no JVM, no Android SDK, no Chromium): `gradle assembleDebug`, real WebView rendering, speech recognition, `DecompressionStream` PDF parsing and the print dialog. The CI APK build plus the asset verification step cover the packaging half; the device covers the rest.
+
+---
+
+## 4. Distribution
+
+1. Push to `main` or a `arena/**` branch, or run the workflow manually.
+2. CI rebuilds dictionaries and the font library, assembles the debug APK, verifies required assets (including ≥100 woff2 faces and the generated font CSS/JS), uploads the artifact and replaces the `apk-latest` release.
+3. Direct link: `https://github.com/yashasvamoond-commits/drafter/releases/download/apk-latest/NyayaLekh-2.0.0.apk`.
+
+Installation requires allowing "install unknown apps" once; the APK is self-signed and is not distributed through Play Store.
+
+---
+
+## 5. Deliberate limits
+
+- No OCR for scanned PDFs; no support for legacy binary `.doc`.
+- Speech depends on the Android speech engine and an installed Hindi voice pack.
+- DOCX font names are advisory: a machine without the chosen Devanagari font substitutes its own.
+- Statute cross-reference tables are aids, not authority; the disclaimer is repeated in the legal panel and the README.

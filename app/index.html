@@ -1,116 +1,211 @@
 <!DOCTYPE html>
-<html lang="hi">
+<html lang="en" data-lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover">
-<meta name="theme-color" content="#1f2a44">
+<meta name="theme-color" content="#111827">
 <meta name="color-scheme" content="light dark">
-<title>न्यायलेख — NyayaLekh Legal Drafting</title>
+<title>NyayaLekh · न्यायलेख — Legal Drafting</title>
+<link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 
-<!-- ==================== splash ==================== -->
+<!-- ============================ splash ============================ -->
 <div id="splash">
-  <div class="splash-logo">
-    <svg viewBox="0 0 64 64" width="72" height="72" aria-hidden="true">
-      <rect x="4" y="4" width="56" height="56" rx="14" fill="#f6efe2"/>
-      <path d="M32 12v6" stroke="#8a5a1b" stroke-width="3" stroke-linecap="round"/>
-      <path d="M18 22h28M32 18v30M24 48h16" stroke="#1f2a44" stroke-width="3" stroke-linecap="round"/>
-      <path d="M18 22l-6 12a6 6 0 0 0 12 0z" fill="none" stroke="#b45309" stroke-width="2.5" stroke-linejoin="round"/>
-      <path d="M46 22l-6 12a6 6 0 0 0 12 0z" fill="none" stroke="#b45309" stroke-width="2.5" stroke-linejoin="round"/>
+  <div class="splash-mark">
+    <svg viewBox="0 0 48 48" width="56" height="56" aria-hidden="true">
+      <path d="M24 6v4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M12 14h24M24 10v26M17 38h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M12 14 7 24a5.5 5.5 0 0 0 11 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M36 14 31 24a5.5 5.5 0 0 0 11 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
     </svg>
   </div>
-  <h1>न्यायलेख</h1>
-  <p>NyayaLekh · Legal Drafting Suite</p>
+  <h1 data-i18n="appName">NyayaLekh</h1>
+  <p data-i18n="appTagline">Legal Drafting Suite</p>
   <div class="splash-bar"><i></i></div>
-  <small id="splashMsg">हिन्दी विधिक प्रारूपण · शब्दकोश लोड हो रहा है…</small>
+  <small id="splashMsg">Loading fonts &amp; dictionaries…</small>
 </div>
 
-<!-- ==================== app bar ==================== -->
+<!-- ============================ top bar ============================ -->
 <header id="appbar">
-  <button class="ibtn" id="btnMenu" data-i18n-title="menu" title="मेन्यू">☰</button>
-  <div class="titlewrap">
-    <input id="docTitle" class="doctitle" value="अनाम दस्तावेज़" aria-label="दस्तावेज़ शीर्षक" spellcheck="false">
-    <span id="docSub" class="docsub">स्वतः सहेजा गया</span>
+  <button class="icon-btn" id="btnMenu" data-i18n-title="menu" title="Menu" aria-label="Menu">
+    <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+  </button>
+
+  <div class="brand" aria-hidden="true">
+    <svg viewBox="0 0 48 48" width="22" height="22">
+      <path d="M24 6v4M12 14h24M24 10v26M17 38h14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+      <path d="M12 14 7 24a5.5 5.5 0 0 0 11 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M36 14 31 24a5.5 5.5 0 0 0 11 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    </svg>
   </div>
-  <button class="ibtn" id="btnUndo" title="पूर्ववत (Undo)">↶</button>
-  <button class="ibtn" id="btnRedo" title="पुनः (Redo)">↷</button>
-  <button class="ibtn" id="btnSearch" title="खोजें (Ctrl+F)">⌕</button>
-  <button class="ibtn primary" id="btnExport" title="फ़ाइल / PDF">⤓</button>
+
+  <div class="title-wrap">
+    <input id="docTitle" class="doc-title" value="Untitled document" spellcheck="false" aria-label="Document title">
+    <div class="doc-sub"><span id="docMeta">A4 · 12 pt</span><span class="dot">·</span><span id="stSaveInline">Saved</span></div>
+  </div>
+
+  <div class="appbar-actions">
+    <button class="icon-btn" id="btnUndo" data-i18n-title="undo" title="Undo">
+      <svg viewBox="0 0 24 24" width="19" height="19"><path d="M9 7H15a5 5 0 0 1 0 10h-3M9 7 4 11l5 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="icon-btn" id="btnRedo" data-i18n-title="redo" title="Redo">
+      <svg viewBox="0 0 24 24" width="19" height="19"><path d="M15 7H9a5 5 0 0 0 0 10h3M15 7l5 4-5 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="icon-btn" id="btnFind" data-i18n-title="search" title="Find">
+      <svg viewBox="0 0 24 24" width="19" height="19"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" id="btnFocus" data-i18n-title="focusMode" title="Focus mode">
+      <svg viewBox="0 0 24 24" width="19" height="19"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="icon-btn" id="btnTheme" data-i18n-title="theme" title="Theme">
+      <svg viewBox="0 0 24 24" width="19" height="19"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <button class="btn-accent" id="btnExport">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 4v10m0 0 4-4m-4 4-4-4M5 17v2h14v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span data-i18n="export">Export</span>
+    </button>
+  </div>
 </header>
 
-<!-- ==================== ribbon ==================== -->
-<section id="ribbon" aria-label="फ़ॉर्मैटिंग">
-  <div class="ribbon-row">
-    <div class="ribbon-scroll">
-      <select id="selFont" class="sel" title="फ़ॉन्ट / Font">
-        <option value="serif">Noto Serif देवनागरी</option>
-        <option value="sans">Noto Sans देवनागरी</option>
-        <option value="tiro">Tiro देवनागरी</option>
-        <option value="mono">मशीन (Mono)</option>
-      </select>
-      <select id="selSize" class="sel narrow" title="आकार / Size">
-        <option>9</option><option>10</option><option>11</option><option selected>12</option>
-        <option>13</option><option>14</option><option>15</option><option>16</option>
-        <option>18</option><option>20</option><option>22</option><option>24</option><option>28</option><option>32</option>
-      </select>
-      <span class="divider"></span>
-      <button class="rbtn" data-cmd="bold" title="मोटा (Ctrl+B)"><b>B</b></button>
-      <button class="rbtn" data-cmd="italic" title="तिरछा (Ctrl+I)"><i>I</i></button>
-      <button class="rbtn" data-cmd="underline" title="रेखांकित (Ctrl+U)"><u>U</u></button>
-      <button class="rbtn" data-cmd="strikeThrough" title="काटें"><s>S</s></button>
-      <button class="rbtn" data-cmd="superscript" title="उर्ध्व">x²</button>
-      <button class="rbtn" data-cmd="subscript" title="अधो">x₂</button>
-      <span class="divider"></span>
-      <button class="rbtn" data-cmd="justifyLeft" title="बाएँ">≡</button>
-      <button class="rbtn" data-cmd="justifyCenter" title="केंद्र">⋮≡</button>
-      <button class="rbtn" data-cmd="justifyRight" title="दाएँ">≡⋮</button>
-      <button class="rbtn" data-cmd="justifyFull" title="सीधा (Justify)">☰</button>
-      <span class="divider"></span>
-      <button class="rbtn" data-cmd="insertUnorderedList" title="बिंदु सूची">•—</button>
-      <button class="rbtn" data-cmd="insertOrderedList" title="क्रमांक सूची">1—</button>
-      <button class="rbtn" data-act="indent" title="इंडेंट बढ़ाएँ">→|</button>
-      <button class="rbtn" data-act="outdent" title="इंडेंट घटाएँ">|←</button>
-      <span class="divider"></span>
-      <button class="rbtn" data-act="lineHeight" title="पंक्ति अंतर">↕≡</button>
-      <button class="rbtn" data-act="para" title="अनुच्छेद सेटिंग">¶</button>
-      <button class="rbtn" data-act="clearFmt" title="फ़ॉर्मैट हटाएँ">T<sub>x</sub></button>
-    </div>
-  </div>
-  <div class="ribbon-row second">
-    <div class="ribbon-scroll">
-      <button class="chip" data-insert="h1">शीर्षक</button>
-      <button class="chip" data-insert="h2">उपशीर्षक</button>
-      <button class="chip" data-insert="center">केंद्रित पंक्ति</button>
-      <button class="chip" data-insert="right">दायाँ</button>
-      <button class="chip" data-insert="pagebreak">पृष्ठ विराम</button>
-      <span class="divider"></span>
-      <button class="chip accent" data-open="templates">आदर्श प्रारूप</button>
-      <button class="chip accent" data-open="convert">कृतिदेव → यूनिकोड</button>
-      <button class="chip" data-open="dict">शब्दकोश</button>
-      <button class="chip" data-open="spell">वर्तनी जाँच</button>
-      <button class="chip" data-open="voice">बोलकर लिखें</button>
-      <button class="chip" data-open="legal">विधिक सहायक</button>
-      <span class="spacer"></span>
-    </div>
+<!-- ============================ format bar ============================ -->
+<section id="toolbar" aria-label="Formatting">
+  <div class="tool-scroll">
+    <select id="selStyle" class="sel" data-i18n-title="style" title="Style">
+      <option value="body">Body text</option>
+      <option value="h1">Title</option>
+      <option value="h2">Heading</option>
+      <option value="h3">Sub-heading</option>
+      <option value="quote">Quotation</option>
+      <option value="signature">Signature block</option>
+    </select>
+
+    <button class="tool-btn wide" id="btnFonts" data-i18n-title="fontHindi" title="Fonts">
+      <span id="fontLabel">Noto Serif Devanagari</span>
+      <svg viewBox="0 0 24 24" width="14" height="14"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+
+    <select id="selSize" class="sel small" data-i18n-title="fontSize" title="Size">
+      <option>9</option><option>10</option><option>10.5</option><option>11</option><option>12</option>
+      <option>13</option><option>14</option><option>15</option><option>16</option><option>18</option>
+      <option>20</option><option>22</option><option>24</option><option>28</option><option>32</option><option>36</option>
+    </select>
+
+    <span class="sep"></span>
+
+    <button class="tool-btn" data-cmd="bold" data-i18n-title="bold" title="Bold"><b>B</b></button>
+    <button class="tool-btn" data-cmd="italic" data-i18n-title="italic" title="Italic"><i>I</i></button>
+    <button class="tool-btn" data-cmd="underline" data-i18n-title="underline" title="Underline"><u>U</u></button>
+    <button class="tool-btn" data-cmd="strikeThrough" data-i18n-title="strike" title="Strikethrough"><s>S</s></button>
+
+    <span class="sep"></span>
+
+    <button class="tool-btn" data-align="left" data-i18n-title="alignLeft" title="Align left">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M4 10h10M4 14h16M4 18h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+    </button>
+    <button class="tool-btn" data-align="center" data-i18n-title="alignCenter" title="Center">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M7 10h10M4 14h16M8 18h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+    </button>
+    <button class="tool-btn" data-align="right" data-i18n-title="alignRight" title="Align right">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M10 10h10M4 14h16M12 18h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+    </button>
+    <button class="tool-btn" data-align="justify" data-i18n-title="alignJustify" title="Justify">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M4 10h16M4 14h16M4 18h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+    </button>
+
+    <span class="sep"></span>
+
+    <button class="tool-btn" data-cmd="insertUnorderedList" data-i18n-title="bulletList" title="Bulleted list">
+      <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="6" cy="7" r="1.5" fill="currentColor"/><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="6" cy="17" r="1.5" fill="currentColor"/><path d="M10 7h10M10 12h10M10 17h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
+    <button class="tool-btn" data-cmd="insertOrderedList" data-i18n-title="numberedList" title="Numbered list">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h2v3M4 9h2M4 15h2v3H4M10 7h10M10 12h10M10 17h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="tool-btn" data-indent="-1" data-i18n-title="decreaseIndent" title="Outdent">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M10 12h10M10 18h10M6 10l-2 2 2 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="tool-btn" data-indent="1" data-i18n-title="increaseIndent" title="Indent">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M10 12h10M10 18h10M4 10l2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+
+    <span class="sep"></span>
+
+    <label class="color-wrap" data-i18n-title="textColor" title="Text colour">
+      <span class="color-glyph">A</span>
+      <input type="color" id="colorText" value="#111827" aria-label="Text colour">
+    </label>
+    <label class="color-wrap" data-i18n-title="highlight" title="Highlight">
+      <span class="color-glyph hl">A</span>
+      <input type="color" id="colorHighlight" value="#fde68a" aria-label="Highlight colour">
+    </label>
+
+    <span class="sep"></span>
+    <button class="tool-btn" id="btnSpacing" data-i18n-title="lineSpacing" title="Spacing">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16M4 12h16M4 18h16M20 9l-2 3 2 3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <button class="tool-btn" id="btnClearFormat" data-i18n-title="clearFormat" title="Clear formatting">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="m6 18 8-12M4 20h9M15 9l4 9M13 20h7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </button>
+    <button class="tool-btn accent-quiet" id="btnMoreFormat" data-i18n-title="more" title="More formatting">
+      <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="6" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="18" cy="12" r="1.7" fill="currentColor"/></svg>
+    </button>
   </div>
 </section>
 
-<!-- ==================== workspace ==================== -->
+<!-- ============================ workspace ============================ -->
 <main id="workspace">
-  <aside id="rail" aria-label="औज़ार">
-    <button class="railbtn" data-open="templates"><span>आ</span><em>प्रारूप</em></button>
-    <button class="railbtn" data-open="dict"><span>श</span><em>शब्दकोश</em></button>
-    <button class="railbtn" data-open="spell"><span>✓</span><em>वर्तनी</em></button>
-    <button class="railbtn" data-open="convert"><span>कृ</span><em>कन्वर्टर</em></button>
-    <button class="railbtn" data-open="voice"><span>🎙</span><em>बोलें</em></button>
-    <button class="railbtn" data-open="legal"><span>§</span><em>विधिक</em></button>
-    <button class="railbtn" data-open="files"><span>🗂</span><em>फ़ाइलें</em></button>
-  </aside>
+  <nav id="rail" aria-label="Sections">
+    <button class="rail-btn" data-screen="files">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 7h6l2 2h8v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      <em data-i18n="files">Files</em>
+    </button>
+    <button class="rail-btn" data-screen="templates">
+      <svg viewBox="0 0 24 24" width="20" height="20"><rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 9h8M8 13h8M8 17h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <em data-i18n="templates">Templates</em>
+    </button>
+    <button class="rail-btn" data-screen="insert">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+      <em data-i18n="insert">Insert</em>
+    </button>
+    <button class="rail-btn" data-screen="layout">
+      <svg viewBox="0 0 24 24" width="20" height="20"><rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4 9h16M9 9v11" stroke="currentColor" stroke-width="1.6"/></svg>
+      <em data-i18n="layout">Layout</em>
+    </button>
+    <button class="rail-btn" data-screen="tools">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M14 6a4 4 0 1 0 4 4l3 3-2 2-3-3a4 4 0 0 1-4-4zM9 15l-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <em data-i18n="tools">Tools</em>
+    </button>
+    <span class="rail-sep"></span>
+    <button class="rail-btn" data-screen="dictionary">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v16H6.5A1.5 1.5 0 0 0 5 21.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 8h6M9 12h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <em data-i18n="dictionary">Dictionary</em>
+    </button>
+    <button class="rail-btn" data-screen="spell">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="m5 17 5-11 5 11M7 13h6M16 15l2 2 3-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <em data-i18n="spell">Spell</em>
+    </button>
+    <button class="rail-btn" data-screen="voice">
+      <svg viewBox="0 0 24 24" width="20" height="20"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <em data-i18n="voice">Voice</em>
+    </button>
+    <button class="rail-btn" data-screen="convert">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 8h13l-3-3M20 16H7l3 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <em data-i18n="convert">Convert</em>
+    </button>
+    <button class="rail-btn" data-screen="legal">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 4v16M6 8h12M8 8l-3 6h6zM16 8l-3 6h6zM8 20h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      <em data-i18n="legal">Legal</em>
+    </button>
+    <span class="rail-spacer"></span>
+    <button class="rail-btn" data-screen="settings">
+      <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v3M12 18v3M4.2 7.5l2.6 1.5M17.2 15l2.6 1.5M4.2 16.5l2.6-1.5M17.2 9l2.6-1.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <em data-i18n="settings">Settings</em>
+    </button>
+  </nav>
 
   <div id="canvasWrap">
-    <div id="ruler" aria-hidden="true"><div class="ruler-inner" id="rulerInner"></div></div>
+    <div id="ruler"><div class="ruler-inner"></div></div>
     <div id="canvas">
       <div id="pages" spellcheck="false"></div>
     </div>
@@ -118,92 +213,113 @@
 
   <aside id="sidePanel" hidden>
     <div class="panel-head">
-      <strong id="panelTitle">शब्दकोश</strong>
-      <button class="ibtn" id="panelClose" title="बंद करें">✕</button>
+      <strong id="panelTitle">Panel</strong>
+      <button class="icon-btn" id="panelClose" data-i18n-title="close" title="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
     </div>
     <div class="panel-body" id="panelBody"></div>
   </aside>
 </main>
 
-<!-- ==================== status bar ==================== -->
+<!-- ============================ status bar ============================ -->
 <footer id="statusbar">
-  <button class="sbtn" id="stLang" title="भाषा बदलें">हिं</button>
-  <span id="stWords">0 शब्द</span>
-  <span id="stChars">0 अक्षर</span>
-  <span id="stPage">पृष्ठ 1</span>
+  <span id="stWords">0 words</span>
+  <span class="sep-dot">·</span>
+  <span id="stChars">0 characters</span>
+  <span class="sep-dot">·</span>
+  <span id="stPage">Page 1</span>
   <span class="grow"></span>
-  <span id="stSave" class="save-ind">सहेजा गया</span>
-  <button class="sbtn" id="stZoomOut">−</button>
-  <button class="sbtn" id="stZoom" title="ज़ूम">100%</button>
-  <button class="sbtn" id="stZoomIn">+</button>
-  <button class="sbtn" id="btnKeyboard" title="कीबोर्ड दिखाएँ">⌨</button>
+  <button class="status-btn" id="stLang" title="Switch language">EN</button>
+  <button class="status-btn" id="stZoomOut" aria-label="Zoom out">−</button>
+  <button class="status-btn" id="stZoom" title="Zoom">100%</button>
+  <button class="status-btn" id="stZoomIn" aria-label="Zoom in">+</button>
+  <button class="status-btn" id="btnZen" title="Focus mode">
+    <svg viewBox="0 0 24 24" width="15" height="15"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
 </footer>
 
-<!-- ==================== floating selection tools ==================== -->
+<!-- ============================ floating selection tools ============================ -->
 <div id="selTools" hidden>
-  <button data-cmd="bold"><b>B</b></button>
-  <button data-cmd="italic"><i>I</i></button>
-  <button data-cmd="underline"><u>U</u></button>
-  <button data-act="highlight">🖍</button>
-  <button data-act="comment">✎</button>
+  <button data-cmd="bold" title="Bold"><b>B</b></button>
+  <button data-cmd="italic" title="Italic"><i>I</i></button>
+  <button data-cmd="underline" title="Underline"><u>U</u></button>
+  <button data-act="highlight" title="Highlight">🖍</button>
+  <button data-act="dict" title="Dictionary">A</button>
 </div>
 
-<!-- ==================== drawer ==================== -->
-<div id="drawer" hidden>
-  <div class="drawer-head">
-    <div class="brand"><span class="brandmark">न्या</span><div><strong>न्यायलेख</strong><small>NyayaLekh · राजस्थान विधिक प्रारूपण</small></div></div>
-  </div>
-  <nav class="drawer-nav">
-    <button data-open="new"><b>⊞</b><span data-i18n="newDoc">नया दस्तावेज़</span></button>
-    <button data-open="files"><b>🗂</b><span data-i18n="myFiles">मेरी फ़ाइलें</span></button>
-    <button data-open="import"><b>⇤</b><span data-i18n="importFile">फ़ाइल खोलें / आयात</span></button>
-    <button data-open="export"><b>⇥</b><span data-i18n="exportDoc">निर्यात / प्रिंट</span></button>
-    <hr>
-    <button data-open="templates"><b>⚖</b><span data-i18n="templates">न्यायालयीन प्रारूप</span></button>
-    <button data-open="courts"><b>🏛</b><span data-i18n="courts">न्यायालय सेटिंग</span></button>
-    <button data-open="dict"><b>अ</b><span data-i18n="dictionary">हिन्दी–अंग्रेज़ी शब्दकोश</span></button>
-    <button data-open="spell"><b>✓</b><span data-i18n="spellcheck">वर्तनी जाँचक</span></button>
-    <button data-open="voice"><b>🎙</b><span data-i18n="voice">बोलकर लिखें</span></button>
-    <button data-open="convert"><b>कृ</b><span data-i18n="convert">कृतिदेव / लीगेसी कन्वर्टर</span></button>
-    <button data-open="translit"><b>अ⇄A</b><span data-i18n="translit">लिप्यंतरण (टाइपिंग)</span></button>
-    <button data-open="typo"><b>✂</b><span data-i18n="typo">मात्रा-सुधारक</span></button>
-    <button data-open="legal"><b>§</b><span data-i18n="legal">विधिक सहायक</span></button>
-    <hr>
-    <button data-open="page"><b>▭</b><span data-i18n="pageSetup">पृष्ठ सेटअप / मार्जिन</span></button>
-    <button data-open="display"><b>◐</b><span data-i18n="display">फ़ॉन्ट, आकार व थीम</span></button>
-    <button data-open="help"><b>?</b><span data-i18n="help">सहायता</span></button>
-    <button data-open="about"><b>ⓘ</b><span data-i18n="about">परिचय व लाइसेंस</span></button>
-  </nav>
-  <div class="drawer-foot">v1.0 · पूर्णतः ऑफ़लाइन · कोई डेटा बाहर नहीं जाता</div>
-</div>
+<!-- ============================ menu sheet ============================ -->
 <div id="scrim" hidden></div>
+<div id="menuSheet" hidden>
+  <div class="menu-head">
+    <div class="brand-row">
+      <span class="brand-badge">न्या</span>
+      <div>
+        <strong data-i18n="appName">NyayaLekh</strong>
+        <small id="menuVersion">v2.0 · Offline</small>
+      </div>
+    </div>
+    <button class="icon-btn" id="menuClose" title="Close">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="menu-grid">
+    <button data-screen="new"><span class="mi">＋</span><b data-i18n="newDoc">New document</b></button>
+    <button data-screen="files"><span class="mi">🗂</span><b data-i18n="myFiles">My documents</b></button>
+    <button data-screen="import"><span class="mi">⇤</span><b data-i18n="openFile">Open / import</b></button>
+    <button data-screen="export"><span class="mi">⇥</span><b data-i18n="exportDoc">Export</b></button>
+    <button data-screen="templates"><span class="mi">⚖</span><b data-i18n="templates">Templates</b></button>
+    <button data-screen="court"><span class="mi">🏛</span><b data-i18n="courtSettings">Court details</b></button>
+    <button data-screen="layout"><span class="mi">▭</span><b data-i18n="pageSetup">Page setup</b></button>
+    <button data-screen="fonts"><span class="mi">Aa</span><b data-i18n="fontLibrary">Font library</b></button>
+    <button data-screen="settings"><span class="mi">⚙</span><b data-i18n="settings">Settings</b></button>
+    <button data-screen="stats"><span class="mi">∑</span><b data-i18n="docStats">Statistics</b></button>
+    <button data-screen="help"><span class="mi">?</span><b data-i18n="helpTitle">Help</b></button>
+    <button data-screen="about"><span class="mi">ⓘ</span><b data-i18n="about">About</b></button>
+  </div>
+  <div class="menu-foot">
+    <button class="lang-pill" id="menuLang"><span>EN</span><i>/</i><span>हिं</span></button>
+    <span class="menu-note" data-i18n="privacyNote">Everything stays on your device.</span>
+  </div>
+</div>
 
-<!-- ==================== modal ==================== -->
+<!-- ============================ modal ============================ -->
 <div id="modal" hidden>
   <div class="modal-card" role="dialog" aria-modal="true">
     <header class="modal-head">
       <strong id="modalTitle">—</strong>
-      <button class="ibtn" id="modalClose">✕</button>
+      <button class="icon-btn" id="modalClose" data-i18n-title="close" title="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
     </header>
     <div class="modal-body" id="modalBody"></div>
-    <footer class="modal-foot" id="modalFoot"></div>
+    <footer class="modal-foot" id="modalFoot"></footer>
   </div>
 </div>
 
-<!-- ==================== find bar ==================== -->
+<!-- ============================ find bar ============================ -->
 <div id="findbar" hidden>
-  <input id="findInput" placeholder="खोजें…" autocomplete="off">
-  <button class="sbtn" id="findPrev">↑</button>
-  <button class="sbtn" id="findNext">↓</button>
-  <span id="findCount" class="findcount"></span>
-  <button class="sbtn" id="findClose">✕</button>
+  <div class="find-row">
+    <input id="findInput" data-i18n-ph="findText" placeholder="Find" autocomplete="off">
+    <span id="findCount" class="find-count"></span>
+    <button class="status-btn" id="findPrev" title="Previous">↑</button>
+    <button class="status-btn" id="findNext" title="Next">↓</button>
+    <button class="status-btn" id="findClose" title="Close">✕</button>
+  </div>
+  <div class="find-row secondary">
+    <input id="replaceInput" data-i18n-ph="replaceWith" placeholder="Replace with" autocomplete="off">
+    <button class="btn sm" id="replaceOne" data-i18n="replace">Replace</button>
+    <button class="btn sm" id="replaceAll" data-i18n="replaceAll">Replace all</button>
+  </div>
 </div>
 
 <div id="toasts" aria-live="polite"></div>
 
-<!-- ==================== scripts ==================== -->
+<!-- ============================ scripts ============================ -->
 <script src="vendor/jszip.min.js"></script>
 <script src="js/core.js"></script>
+<script src="js/fonts.js"></script>
+<script src="js/i18n.js"></script>
 <script src="js/kd-table.js"></script>
 <script src="data/legal.js"></script>
 <script src="js/text.js"></script>

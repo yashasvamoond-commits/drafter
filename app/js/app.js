@@ -1,1340 +1,1967 @@
 /* =============================================================================
- * NyayaLekh — application shell: screens, panels, menus, export & voice.
+ * NyayaLekh — application shell: routing, panels, import/export, voice,
+ * court details, font library and settings.
  * ========================================================================== */
 (function (global) {
   "use strict";
   var ND = (global.ND = global.ND || {});
-  var U = ND.util, D = ND.doc, T = ND.text, E = ND.editor, S = ND.settings;
-
+  var U = ND.util, D = ND.doc, E = ND.editor, T = ND.text;
   var A = (ND.app = {});
-  var current = null;          // current document
-  var saveTimer = null;
-  var lastSaved = 0;
+
+  var S = {
+    doc: null,
+    screen: null,
+    zoom: 1,
+    savedAt: 0,
+    dirty: false,
+    files: [],
+    fileQuery: "",
+    tplCat: "all",
+    tplLang: "all",
+    dictQuery: "",
+    dictResults: null,
+    spellIssues: null,
+    legalTab: "glossary",
+    legalQuery: "",
+    voiceOn: false,
+    voiceText: "",
+    convMode: "k2u",
+    convFont: "krutidev",
+    saveTimer: null,
+    ready: false,
+    dictReady: false
+  };
+  A.state = S;
+
+  function $(sel) { return document.querySelector(sel); }
+  function $$(sel) { return U.$$(sel); }
+  function L(en, hi) { return ND.lang() === "hi" ? hi : en; }
+  function esc(s) { return U.escapeHtml(String(s == null ? "" : s)); }
+  function el(id) { return document.getElementById(id); }
+  function status(msg, kind) { U.toast(msg, kind || "ok"); }
 
   /* ==========================================================================
-   * modal helpers
+   * 1. THEME, ZOOM, LANGUAGE CHROME
    * ======================================================================== */
-  function modal(title, build, footer) {
-    var m = document.getElementById("modal");
-    document.getElementById("modalTitle").textContent = title;
-    var body = document.getElementById("modalBody");
-    var foot = document.getElementById("modalFoot");
-    body.innerHTML = "";
+  var THEMES = ["light", "dark", "sepia", "auto"];
+  var ACCENTS = ["indigo", "saffron", "teal", "plum", "slate"];
+
+  function applyTheme() {
+    var p = ND.prefs;
+    document.documentElement.setAttribute("data-theme", p.theme || "light");
+    document.documentElement.setAttribute("data-accent", p.accent || "indigo");
+    var meta = $('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", p.theme === "dark" ? "#10131a" : "#f6f5f2");
+  }
+
+  function setTheme(next) {
+    ND.setPref("theme", next);
+    applyTheme();
+  }
+
+  function applyZoom(z) {
+    S.zoom = Math.max(0.5, Math.min(2.2, Math.round(z * 20) / 20));
+    document.documentElement.style.setProperty("--zoom", String(S.zoom));
+    var b = el("stZoom");
+    if (b) b.textContent = Math.round(S.zoom * 100) + "%";
+  }
+
+  function updateLangPills() {
+    var isHi = ND.lang() === "hi";
+    var b = el("stLang");
+    if (b) b.textContent = isHi ? "हिं" : "EN";
+    var p = el("menuLang");
+    if (p) {
+      var spans = p.querySelectorAll("span");
+      if (spans[0]) spans[0].classList.toggle("on", !isHi);
+      if (spans[1]) spans[1].classList.toggle("on", isHi);
+    }
+  }
+
+  /* ==========================================================================
+   * 2. DOCUMENT LIFECYCLE
+   * ======================================================================== */
+  function newDocument(opts) {
+    var doc = D.newDoc(opts || {});
+    startDocument(doc);
+    saveDoc(true);
+    status(L("New document ready", "नया दस्तावेज़ तैयार"));
+    return doc;
+  }
+
+  function startDocument(doc) {
+    S.doc = D.migrate(doc);
+    S.dirty = false;
+    E.init(S.doc);
+    E.setDoc(S.doc);
+    syncTitle();
+    updateStats();
+    applyDocMeta();
+    if (S.screen === "files" || S.screen === "stats") renderPanel(S.screen);
+  }
+
+  function loadInitial() {
+    return ND.store.kvGet("current", null).then(function (id) {
+      if (!id) return null;
+      return ND.store.get(id);
+    }).then(function (doc) {
+      if (doc) return doc;
+      return ND.store.all().then(function (arr) {
+        return arr && arr.length ? arr[0] : null;
+      });
+    }).catch(function () { return null; });
+  }
+
+  function syncTitle() {
+    var input = el("docTitle");
+    if (!input) return;
+    input.value = S.doc.title || ND.t("untitled");
+    document.title = (S.doc.title || ND.t("appName")) + " · " + ND.t("appName");
+  }
+
+  function applyDocMeta() {
+    var d = S.doc;
+    var meta = el("docMeta");
+    if (meta) {
+      var size = d.page.size || "A4";
+      var orient = d.page.orientation === "landscape" ? " · " + L("Landscape", "भूदृश्य") : "";
+      meta.textContent = size + orient + " · " + (d.style.size || 12) + " pt";
+    }
+    var fl = el("fontLabel");
+    if (fl) fl.textContent = ND.fonts.label(d.style.devFont);
+    var sizeSel = el("selSize");
+    if (sizeSel) sizeSel.value = String(d.style.size || 12);
+    document.body.classList.toggle("continuous", ND.prefs.pageView === "continuous");
+    document.body.classList.toggle("show-marks", !!ND.prefs.showMarks);
+  }
+
+  function updateStats() {
+    if (!S.doc) return;
+    var st = D.stats(S.doc);
+    var w = el("stWords"), c = el("stChars");
+    if (w) w.textContent = ND.t("wordCount", { n: st.words });
+    if (c) c.textContent = ND.t("textStats", { words: st.words, chars: st.chars });
+    if (el("stPage")) E.updateNumbers();
+    if (S.screen === "stats") renderPanel("stats");
+  }
+
+  function saveDoc(immediate) {
+    if (!S.doc) return Promise.resolve();
+    clearTimeout(S.saveTimer);
+    var run = function () {
+      E.syncAll();
+      setSaveState(ND.t("saving"));
+      S.dirty = false;
+      return ND.store.put(S.doc).then(function () {
+        S.savedAt = Date.now();
+        setSaveState(ND.t("saved"));
+        return ND.store.kvSet("current", S.doc.id);
+      }).catch(function () {
+        setSaveState(ND.t("savingError"));
+      });
+    };
+    if (immediate) return run();
+    S.saveTimer = setTimeout(run, 700);
+    return Promise.resolve();
+  }
+
+  function setSaveState(text) {
+    var a = el("stSaveInline");
+    if (a) a.textContent = text;
+  }
+
+  /* ==========================================================================
+   * 3. MODAL / SHEET HELPERS
+   * ======================================================================== */
+  function openModal(title, bodyHtml, buttons) {
+    var m = el("modal");
+    if (!m) return;
+    el("modalTitle").textContent = title;
+    el("modalBody").innerHTML = bodyHtml || "";
+    var foot = el("modalFoot");
     foot.innerHTML = "";
-    build(body);
-    (footer || []).forEach(function (b) {
-      var btn = U.el("button", { class: "btn " + (b.cls || ""), text: b.label });
+    (buttons || [{ label: ND.t("close"), act: "close" }]).forEach(function (b) {
+      var btn = document.createElement("button");
+      btn.className = "btn " + (b.kind || "");
+      btn.textContent = b.label;
       btn.addEventListener("click", function () {
-        if (b.onClick) {
-          var keep = b.onClick(body);
-          if (keep === true) return;
-        }
+        if (b.onClick) b.onClick();
         if (b.keepOpen !== true) closeModal();
       });
       foot.appendChild(btn);
     });
     m.hidden = false;
-    var firstInput = body.querySelector("input,textarea,select");
-    if (firstInput) setTimeout(function () { firstInput.focus(); }, 60);
+    var first = m.querySelector("input,textarea,select");
+    if (first) setTimeout(function () { first.focus(); first.select && first.select(); }, 40);
   }
-  function closeModal() { document.getElementById("modal").hidden = true; }
-  A.modal = modal;
-  A.closeModal = closeModal;
 
-  function confirmBox(title, message, onYes, yesLabel) {
-    modal(title, function (b) {
-      b.appendChild(U.el("p", { text: message, style: { margin: "4px 0 8px", lineHeight: "1.6" } }));
-    }, [
-      { label: "रद्द करें", cls: "ghost" },
-      { label: yesLabel || "हाँ, करें", cls: "accent", onClick: onYes }
+  function closeModal() {
+    var m = el("modal");
+    if (m) m.hidden = true;
+  }
+
+  function promptModal(title, label, value, onOk, multiline) {
+    var body = '<div class="field"><label>' + esc(label) + "</label>" +
+      (multiline
+        ? '<textarea class="area" id="promptInput" style="min-height:90px">' + esc(value || "") + "</textarea>"
+        : '<input class="input" id="promptInput" value="' + esc(value || "") + '">') + "</div>";
+    openModal(title, body, [
+      { label: ND.t("cancel"), act: "close" },
+      {
+        label: ND.t("save"), kind: "primary", onClick: function () {
+          var v = el("promptInput").value;
+          onOk(v);
+        }
+      }
     ]);
   }
 
-  /* ==========================================================================
-   * side panel
-   * ======================================================================== */
-  function openPanel(title, build) {
-    var p = document.getElementById("sidePanel");
-    document.getElementById("panelTitle").textContent = title;
-    var body = document.getElementById("panelBody");
-    body.innerHTML = "";
-    build(body);
-    p.hidden = false;
-    document.querySelectorAll(".railbtn").forEach(function (b) { b.classList.remove("on"); });
-    closeDrawer();
+  function openSheet() {
+    var scrim = el("scrim"), sheet = el("menuSheet");
+    if (scrim) scrim.hidden = false;
+    if (sheet) sheet.hidden = false;
   }
-  function closePanel() { document.getElementById("sidePanel").hidden = true; }
-
-  /* ==========================================================================
-   * document lifecycle
-   * ======================================================================== */
-  function loadDoc(doc) {
-    current = doc;
-    document.getElementById("docTitle").value = doc.title || "अनाम दस्तावेज़";
-    E.init(doc);
-    E.setDoc(doc);
-    updateStats();
-    fitZoom();
-    setSaveState("saved");
-  }
-
-  function newDoc(opts) {
-    var doc = D.newDoc(opts);
-    loadDoc(doc);
-    ND.store.put(doc);
-    U.toast("नया दस्तावेज़ बनाया गया", "ok");
-  }
-
-  function autosave() {
-    clearTimeout(saveTimer);
-    if (!S.autosave) return;
-    setSaveState("saving");
-    saveTimer = setTimeout(function () {
-      if (!current) return;
-      current.updatedAt = Date.now();
-      ND.store.put(JSON.parse(JSON.stringify(current))).then(function () {
-        lastSaved = Date.now();
-        setSaveState("saved");
-      }).catch(function () { setSaveState("error"); });
-    }, 900);
-  }
-
-  function setSaveState(kind) {
-    var el = document.getElementById("stSave");
-    var sub = document.getElementById("docSub");
-    if (!el) return;
-    var txt = { saved: "सहेजा गया", saving: "सहेजा जा रहा है…", error: "सहेजने में त्रुटि" }[kind] || "";
-    el.textContent = txt;
-    el.classList.toggle("dirty", kind !== "saved");
-    if (sub) sub.textContent = txt + " · " + ND.i18n.t("words") + " " + (D.stats(current).words || 0);
-  }
-
-  function updateStats() {
-    if (!current) return;
-    E.updateStats();
-    setSaveState(lastSaved ? "saved" : "saved");
+  function closeSheet() {
+    var scrim = el("scrim"), sheet = el("menuSheet");
+    if (scrim) scrim.hidden = true;
+    if (sheet) sheet.hidden = true;
   }
 
   /* ==========================================================================
-   * screens
+   * 4. ROUTER
    * ======================================================================== */
+  var PANEL_TITLES = {
+    files: function () { return L("Documents", "दस्तावेज़"); },
+    templates: function () { return L("Templates", "प्रारूप"); },
+    insert: function () { return L("Insert", "सम्मिलित करें"); },
+    layout: function () { return L("Page setup", "पृष्ठ सेटअप"); },
+    tools: function () { return L("Tools", "उपकरण"); },
+    dictionary: function () { return L("Dictionary", "शब्दकोश"); },
+    spell: function () { return L("Spell check", "वर्तनी जाँच"); },
+    voice: function () { return L("Speech to text", "बोलकर लिखें"); },
+    convert: function () { return L("Kruti Dev converter", "कृतिदेव परिवर्तक"); },
+    legal: function () { return L("Legal reference", "विधिक संदर्भ"); },
+    settings: function () { return L("Settings", "सेटिंग्स"); },
+    export: function () { return L("Export", "निर्यात"); },
+    import: function () { return L("Open or import", "खोलें / आयात"); },
+    court: function () { return L("Court details", "न्यायालय विवरण"); },
+    fonts: function () { return L("Font library", "फ़ॉन्ट संग्रह"); },
+    stats: function () { return L("Statistics", "आँकड़े"); },
+    help: function () { return L("Help", "सहायता"); },
+    about: function () { return L("About", "परिचय"); }
+  };
 
-  /* ---------------------------------------------------------------- templates */
-  function screenTemplates() {
-    openPanel("न्यायालयीन प्रारूप", function (body) {
-      var cats = [
-        { id: "all", label: "सभी" },
-        { id: "criminal", label: "फौजदारी" },
-        { id: "civil", label: "दीवानी" },
-        { id: "misc", label: "विविध" }
-      ];
-      var tabs = U.el("div", { class: "tabs" });
-      var list = U.el("div", { class: "list" });
-      cats.forEach(function (c, i) {
-        var b = U.el("button", { text: c.label, class: i === 0 ? "on" : "" });
-        b.addEventListener("click", function () {
-          tabs.querySelectorAll("button").forEach(function (x) { x.classList.remove("on"); });
-          b.classList.add("on");
-          render(c.id);
-        });
-        tabs.appendChild(b);
-      });
-      function render(cat) {
-        list.innerHTML = "";
-        ND.templates.filter(function (t) { return cat === "all" || t.cat === cat; }).forEach(function (t) {
-          var item = U.el("div", { class: "item" });
-          var grow = U.el("div", { class: "grow" });
-          grow.appendChild(U.el("strong", { text: t.title }));
-          grow.appendChild(U.el("small", { text: t.sub }));
-          item.appendChild(grow);
-          item.appendChild(U.el("button", { class: "btn sm", text: "लगाएँ" }));
-          item.addEventListener("click", function () { insertTemplate(t); });
-          list.appendChild(item);
-        });
+  function go(name) {
+    closeSheet();
+    closeModal();
+    if (name === "new") {
+      if (hasContent() && S.dirty) {
+        openModal(L("Start a new document?", "नया दस्तावेज़ शुरू करें?"),
+          "<p class='hint'>" + L("The current document is saved in Documents. You can reopen it any time.",
+            "वर्तमान दस्तावेज़ दस्तावेज़ सूची में सुरक्षित है, आप उसे कभी भी खोल सकते हैं।") + "</p>",
+          [
+            { label: ND.t("cancel") },
+            { label: L("New document", "नया दस्तावेज़"), kind: "primary", onClick: function () { newDocument(); } }
+          ]);
+        return;
       }
-      body.appendChild(tabs);
-      body.appendChild(list);
-      body.appendChild(U.el("p", { class: "hint", text: "प्रारूप में न्यायालय का नाम, प्रकरण संख्या, पक्षकार एवं दिनांक स्वतः भर जाते हैं — इन्हें ‘न्यायालय सेटिंग’ में बदलें।" }));
-      render("all");
+      newDocument();
+      return;
+    }
+    if (name === "import") { doImport(); return; }
+    if (S.screen === name && !el("sidePanel").hidden) { closePanel(); return; }
+    renderPanel(name);
+  }
+  A.go = go;
+
+  function hasContent() {
+    return !!(S.doc && D.plainText(S.doc).trim().length);
+  }
+
+  function closePanel() {
+    var p = el("sidePanel");
+    if (p) p.hidden = true;
+    S.screen = null;
+    $$("#rail .rail-btn").forEach(function (b) { b.classList.remove("on"); });
+  }
+
+  function markRail(name) {
+    $$("#rail .rail-btn").forEach(function (b) {
+      b.classList.toggle("on", b.getAttribute("data-screen") === name);
     });
   }
 
-  function insertTemplate(t) {
-    var blocks = D.buildTemplate(t.id, current);
-    if (!blocks) return;
-    var apply = function (replace) {
-      E.pushUndo();
-      if (replace) current.blocks = blocks;
-      else current.blocks = current.blocks.concat(blocks);
-      current.title = t.title;
-      document.getElementById("docTitle").value = t.title;
-      E.setDoc(current);
-      autosave();
-      U.toast(replace ? "प्रारूप खोला गया" : "प्रारूप जोड़ा गया", "ok");
-    };
-    modal(t.title, function (b) {
-      b.appendChild(U.el("p", { class: "hint", text: t.sub }));
-      b.appendChild(U.el("div", { class: "card", style: { marginTop: "10px" }, text: "पूर्वावलोकन:" }));
-      var prev = U.el("div", { style: { maxHeight: "240px", overflow: "auto", fontFamily: '"Noto Serif Dev", serif', fontSize: "13px", lineHeight: "1.7", background: "var(--surface-2)", padding: "10px", borderRadius: "10px", whiteSpace: "pre-wrap" } });
-      prev.textContent = blocks.slice(0, 14).map(function (x) { return U.stripTags(x.html); }).join("\n");
-      b.appendChild(prev);
-    }, [
-      { label: "रद्द करें", cls: "ghost" },
-      { label: "वर्तमान में जोड़ें", onClick: function () { apply(false); } },
-      { label: "नया दस्तावेज़", cls: "accent", onClick: function () { apply(true); } }
-    ]);
+  function renderPanel(name) {
+    var panel = el("sidePanel"), body = el("panelBody"), title = el("panelTitle");
+    if (!panel || !body) return;
+    S.screen = name;
+    panel.hidden = false;
+    if (title) title.textContent = PANEL_TITLES[name] ? PANEL_TITLES[name]() : name;
+    markRail(name);
+    var builder = PANELS[name];
+    body.scrollTop = 0;
+    body.innerHTML = builder ? builder() : "";
+    if (AFTER[name]) AFTER[name]();
   }
+  A.renderPanel = renderPanel;
+
+  /* ==========================================================================
+   * 5. PANELS
+   * ======================================================================== */
+  function seg(dataAttr, options, current) {
+    return "<div class='seg'>" + options.map(function (o) {
+      return "<button data-act='seg' data-" + dataAttr + "='" + esc(o.v) + "' class='" +
+        (String(o.v) === String(current) ? "on" : "") + "'>" + esc(o.label) + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function toggleRow(pref, label, hint, value) {
+    return "<div class='set-row'><div class='lbl'><strong>" + esc(label) + "</strong>" +
+      (hint ? "<small>" + esc(hint) + "</small>" : "") + "</div>" +
+      "<button class='switch" + (value ? " on" : "") + "' data-act='toggle' data-pref='" + pref + "' role='switch' aria-checked='" + (!!value) + "'><i></i></button></div>";
+  }
+
+  function actionRow(label, hint, act, extra) {
+    return "<button class='list-item' data-act='" + act + "'" + (extra || "") + ">" +
+      "<span class='grow'><strong>" + esc(label) + "</strong>" +
+      (hint ? "<small>" + esc(hint) + "</small>" : "") + "</span><span aria-hidden='true'>›</span></button>";
+  }
+
+  var PANELS = {};
+  var AFTER = {};
 
   /* ------------------------------------------------------------------ files */
-  function screenFiles() {
-    openPanel("मेरी फ़ाइलें", function (body) {
-      var list = U.el("div", { class: "list" });
-      body.appendChild(list);
-      ND.store.all().then(function (docs) {
-        list.innerHTML = "";
-        if (!docs.length) {
-          list.appendChild(U.el("div", { class: "empty-state", text: "कोई सहेजा गया दस्तावेज़ नहीं है।" }));
-          return;
-        }
-        docs.forEach(function (d) {
-          var item = U.el("div", { class: "item" });
-          var grow = U.el("div", { class: "grow" });
-          grow.appendChild(U.el("strong", { text: d.title || "अनाम" }));
-          var st = D.stats(d);
-          grow.appendChild(U.el("small", { text: U.fmtDate(d.updatedAt) + " · " + st.words + " शब्द" }));
-          item.appendChild(grow);
-          var open = U.el("button", { class: "btn sm primary", text: "खोलें" });
-          open.addEventListener("click", function () { loadDoc(d); closePanel(); U.toast("खोला गया", "ok"); });
-          var more = U.el("button", { class: "sbtn", text: "⋯" });
-          more.addEventListener("click", function () { fileActions(d); });
-          item.appendChild(open);
-          item.appendChild(more);
-          list.appendChild(item);
-        });
-      });
-    });
-  }
+  PANELS.files = function () {
+    return "<div class='row' style='margin-bottom:12px'>" +
+      "<button class='btn primary' data-act='new-doc'>" + L("+ New", "+ नया") + "</button>" +
+      "<button class='btn' data-act='import-file'>" + L("Import", "आयात") + "</button>" +
+      "</div>" +
+      "<input class='input' id='fileSearch' placeholder='" + esc(L("Search documents", "दस्तावेज़ खोजें")) + "' value='" + esc(S.fileQuery) + "'>" +
+      "<div id='fileList' class='list' style='margin-top:12px'><div class='empty'>" + L("Loading…", "लोड हो रहा है…") + "</div></div>";
+  };
+  AFTER.files = function () {
+    ND.store.all().then(function (arr) {
+      S.files = arr || [];
+      paintFiles();
+    }).catch(function () { paintFiles(); });
+  };
 
-  function fileActions(d) {
-    modal(d.title || "दस्तावेज़", function (b) {
-      var actions = [
-        ["नाम बदलें", function () {
-          var inp = U.el("input", { class: "input", value: d.title });
-          b.innerHTML = "";
-          b.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "नया नाम" }), inp]));
-          b.appendChild(U.el("button", {
-            class: "btn primary", text: "सहेजें", onclick: function () {
-              d.title = inp.value || d.title;
-              ND.store.put(d).then(function () {
-                if (current && current.id === d.id) document.getElementById("docTitle").value = d.title;
-                closeModal(); screenFiles();
-              });
-            }
-          }));
-        }],
-        ["प्रतिलिपि बनाएँ", function () {
-          var copy = JSON.parse(JSON.stringify(d));
-          copy.id = U.uid("doc");
-          copy.title = d.title + " (प्रतिलिपि)";
-          copy.createdAt = Date.now();
-          copy.updatedAt = Date.now();
-          ND.store.put(copy).then(function () { closeModal(); screenFiles(); U.toast("प्रतिलिपि बनाई गई", "ok"); });
-        }],
-        ["निर्यात करें", function () { closeModal(); screenExport(d); }],
-        ["हटाएँ", function () {
-          closeModal();
-          confirmBox("दस्तावेज़ हटाएँ", "क्या आप वास्तव में ‘" + (d.title || "") + "’ हटाना चाहते हैं? यह क्रिया वापस नहीं ली जा सकती।", function () {
-            ND.store.del(d.id).then(function () {
-              if (current && current.id === d.id) newDoc();
-              screenFiles();
-              U.toast("हटा दिया गया", "ok");
-            });
-          }, "हटाएँ");
-        }]
-      ];
-      b.appendChild(U.el("div", { class: "list" }, actions.map(function (a) {
-        var btn = U.el("button", { class: "btn block", text: a[0], style: { justifyContent: "flex-start" } });
-        btn.addEventListener("click", a[1]);
-        return btn;
-      })));
-    }, [{ label: "बंद करें", cls: "ghost" }]);
-  }
-
-  /* ----------------------------------------------------------------- export */
-  function screenExport(doc) {
-    var d = doc || current;
-    modal("निर्यात / प्रिंट", function (b) {
-      b.appendChild(U.el("p", { class: "hint", text: "फ़ाइलें टैबलेट के Documents/NyayaLekh फ़ोल्डर में सहेजी जाती हैं, जहाँ से WPS Office सीधे खोल सकता है।" }));
-      var grid = U.el("div", { class: "cards", style: { marginTop: "12px" } });
-      var opts = [
-        ["Word (.docx)", "MS Word / WPS Office में खुलने योग्य", "docx"],
-        ["PDF (प्रिंट)", "सीधे प्रिंट या ‘PDF में सहेजें’", "pdf"],
-        ["HTML", "वेब/ई-मेल हेतु", "html"],
-        ["Plain text (.txt)", "सरल पाठ", "txt"],
-        ["RTF", "पुराने सिस्टम हेतु", "rtf"]
-      ];
-      opts.forEach(function (o) {
-        var c = U.el("button", { class: "card" }, [
-          U.el("strong", { text: o[0] }),
-          U.el("small", { text: o[1] })
-        ]);
-        c.addEventListener("click", function () {
-          closeModal();
-          doExport(d, o[2]);
-        });
-        grid.appendChild(c);
-      });
-      b.appendChild(grid);
-    }, [{ label: "बंद करें", cls: "ghost" }]);
-  }
-
-  function doExport(doc, kind) {
-    var name = U.safeName(doc.title);
-    if (kind === "docx") {
-      D.toDocxBlob(doc).then(function (blob) {
-        saveBlob(name + ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", blob);
-      });
-    } else if (kind === "pdf") {
-      if (ND.native.has()) { ND.native.call("printPage"); U.toast("प्रिंट डायलॉग खुल रहा है — ‘PDF के रूप में सहेजें’ चुनें", "ok", 3500); }
-      else { window.print(); }
-    } else if (kind === "html") {
-      saveBlob(name + ".html", "text/html", new Blob([D.toHtml(doc)], { type: "text/html;charset=utf-8" }));
-    } else if (kind === "txt") {
-      saveBlob(name + ".txt", "text/plain", new Blob([D.toText(doc)], { type: "text/plain;charset=utf-8" }));
-    } else if (kind === "rtf") {
-      saveBlob(name + ".rtf", "application/rtf", new Blob([D.toRtf(doc)], { type: "application/rtf" }));
+  function paintFiles() {
+    var box = el("fileList");
+    if (!box) return;
+    var list = S.files.slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+    if (S.fileQuery) {
+      var q = S.fileQuery.toLowerCase();
+      list = list.filter(function (d) { return ((d.title || "") + " " + D.plainText(d)).toLowerCase().indexOf(q) >= 0; });
     }
-  }
-
-  function saveBlob(name, mime, blob) {
-    if (ND.native.has()) {
-      U.toast("सहेजा जा रहा है…", "", 1200);
-      ND.native.saveToDocuments(name, mime, blob, function (err, path) {
-        if (err) U.toast("सहेजने में समस्या: " + err, "err");
-        else U.toast("सहेजा गया: " + (path || name), "ok", 3200);
-      });
-    } else {
-      U.download(name, blob);
-      U.toast("डाउनलोड शुरू: " + name, "ok");
+    if (!list.length) {
+      box.innerHTML = "<div class='empty'>" + L("No documents yet. Tap “+ New” or import a file.", "अभी कोई दस्तावेज़ नहीं। “+ नया” दबाएँ या फ़ाइल आयात करें।") + "</div>";
+      return;
     }
+    box.innerHTML = list.map(function (d) {
+      var st = D.stats(d);
+      var active = S.doc && d.id === S.doc.id;
+      return "<div class='list-item" + (active ? " active" : "") + "' data-id='" + esc(d.id) + "'>" +
+        "<button class='grow' data-act='open-doc' data-id='" + esc(d.id) + "' style='text-align:left;background:none;border:0;padding:0;color:inherit;font:inherit'>" +
+        "<strong>" + esc(d.title || ND.t("untitled")) + "</strong>" +
+        "<small>" + esc(U.fmtDate(d.updatedAt || d.createdAt)) + " · " + esc(ND.t("wordCount", { n: st.words })) + "</small>" +
+        "</button>" +
+        "<button class='icon-btn' data-act='rename-doc' data-id='" + esc(d.id) + "' title='" + esc(ND.t("rename")) + "'>✎</button>" +
+        "<button class='icon-btn' data-act='delete-doc' data-id='" + esc(d.id) + "' title='" + esc(ND.t("delete")) + "'>🗑</button>" +
+        "</div>";
+    }).join("");
   }
 
-  /* ----------------------------------------------------------------- import */
-  function screenImport() {
-    modal("फ़ाइल खोलें / आयात", function (b) {
-      b.appendChild(U.el("p", { class: "hint", text: "WPS Office, MS Word, OpenOffice आदि से बनी .docx / .odt / .rtf / .txt / .html फ़ाइलें खोलें।" }));
-      var btn = U.el("button", { class: "btn accent block", text: "टैबलेट से फ़ाइल चुनें", style: { marginTop: "12px" } });
-      btn.addEventListener("click", function () {
-        ND.native.pickFile(function (name, b64) {
-          closeModal();
-          importFromBase64(name, b64);
-        });
-      });
-      b.appendChild(btn);
-      b.appendChild(U.el("p", { class: "hint", style: { marginTop: "10px" },
-        text: "टिप: पुरानी .doc फ़ाइल को WPS Office में खोलकर .docx के रूप में सहेजें। PDF आयात केवल टेक्स्ट वाली PDF हेतु कार्य करता है।" }));
-    }, [{ label: "बंद करें", cls: "ghost" }]);
-  }
+  /* -------------------------------------------------------------- templates */
+  var CATS = [
+    { v: "all", label: function () { return L("All", "सभी"); } },
+    { v: "criminal", label: function () { return L("Criminal", "आपराधिक"); } },
+    { v: "civil", label: function () { return L("Civil", "दीवानी"); } },
+    { v: "misc", label: function () { return L("Miscellaneous", "विविध"); } }
+  ];
 
-  function importFromBase64(name, b64) {
-    U.toast("आयात हो रहा है…", "", 1500);
-    D.importFile(name, b64).then(function (blocks) {
-      // legacy font detection
-      var plain = blocks.map(function (x) { return U.stripTags(x.html); }).join("\n");
-      var legacy = T.devRatio(plain) < 0.3 && /[\[\]{}<>;~|\\]/.test(plain);
-      var finish = function () {
-        var doc = D.newDoc({ title: name.replace(/\.[^.]+$/, ""), blocks: blocks });
-        loadDoc(doc);
-        ND.store.put(doc);
-        U.toast("आयात सफल — " + blocks.length + " अनुच्छेद", "ok");
-      };
-      if (legacy) {
-        confirmBox("पुराना फ़ॉन्ट मिला", "इस फ़ाइल का पाठ कृतिदेव/लीगेसी फ़ॉन्ट में लगता है। क्या इसे यूनिकोड में बदल दिया जाए?", function () {
-          blocks.forEach(function (x) {
-            x.html = U.escapeHtml(T.fixMatras(T.krutiToUnicode(U.stripTags(x.html))));
-          });
-          finish();
-        }, "यूनिकोड में बदलें");
-      } else finish();
-    }).catch(function (err) {
-      U.toast(err.message || "आयात असफल", "err", 4000);
+  PANELS.templates = function () {
+    var cats = CATS.map(function (c) {
+      return "<button data-act='tplcat' data-cat='" + c.v + "' class='" + (S.tplCat === c.v ? "on" : "") + "'>" + esc(c.label()) + "</button>";
+    }).join("");
+    var tpls = ND.templates.filter(function (t) {
+      return (S.tplCat === "all" || t.cat === S.tplCat) && (S.tplLang === "all" || t.lang === S.tplLang);
     });
-  }
+    var cards = tpls.map(function (t) {
+      return "<button class='card' data-act='use-tpl' data-tpl='" + esc(t.id) + "'>" +
+        "<span class='cat'>" + esc(t.lang === "hi" ? L("Hindi", "हिन्दी") : L("English", "अंग्रेज़ी")) + "</span>" +
+        "<strong" + (t.lang === "hi" ? " style='font-family:var(--ui-dev)'" : "") + ">" + esc(t.title) + "</strong>" +
+        "<small>" + esc(t.sub) + "</small></button>";
+    }).join("") || "<div class='empty'>" + L("No templates in this filter.", "इस फ़िल्टर में कोई प्रारूप नहीं।") + "</div>";
+    return "<div class='tabs'>" + cats + "</div>" +
+      "<div class='row between' style='margin-bottom:12px'>" +
+      seg("lang", [{ v: "all", label: L("All", "सभी") }, { v: "hi", label: "हिन्दी" }, { v: "en", label: "English" }], S.tplLang) +
+      "<span class='hint'>" + tpls.length + "</span></div>" +
+      "<p class='hint' style='margin-bottom:10px'>" + L("Placeholders such as {{court}} are filled from Court details.", "{{court}} जैसे स्थान-चिह्न न्यायालय विवरण से भरते हैं।") + "</p>" +
+      "<div class='cards'>" + cards + "</div>";
+  };
 
-  /* ----------------------------------------------------------------- courts */
-  function screenCourts() {
-    openPanel("न्यायालय सेटिंग", function (b) {
-      var c = Object.assign({}, current.court);
-      var sel = U.el("select", { class: "input" });
-      D.COURTS.forEach(function (x) {
-        var o = U.el("option", { value: x.id, text: x.hi + " (" + x.en + ")" });
-        if (c.type === x.id) o.selected = true;
-        sel.appendChild(o);
-      });
-      function field(label, key, ph) {
-        var inp = U.el("input", { class: "input", value: c[key] || "", placeholder: ph || "" });
-        inp.addEventListener("input", function () { c[key] = inp.value; });
-        return U.el("div", { class: "field" }, [U.el("label", { text: label }), inp]);
+  function applyTemplate(id) {
+    var tpl = ND.templates.filter(function (t) { return t.id === id; })[0];
+    if (!tpl) return;
+    var blocks = D.buildTemplate(id, S.doc);
+    if (!blocks) return;
+    var doApply = function (mode) {
+      E.pushUndo();
+      if (mode === "replace") {
+        S.doc.blocks = blocks;
+        S.doc.title = tpl.title;
+        syncTitle();
+      } else {
+        Array.prototype.splice.apply(S.doc.blocks, [S.doc.blocks.length, 0].concat(blocks));
       }
-      b.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "न्यायालय का प्रकार" }), sel]));
-      b.appendChild(U.el("p", { class: "hint", text: "JM = न्यायिक मजिस्ट्रेट · ACJM = अपर मुख्य न्यायिक मजिस्ट्रेट · ADJ = अपर जिला एवं सत्र न्यायाधीश" }));
-      b.appendChild(field("स्थान / जिला", "place", "जयपुर"));
-      b.appendChild(field("न्यायालय का पूरा नाम (वैकल्पिक)", "name", "न्यायालय श्रीमान अपर मुख्य न्यायिक मजिस्ट्रेट संख्या-3, जयपुर"));
-      b.appendChild(field("न्यायाधीश का नाम", "judge", "श्री ………………"));
-      b.appendChild(field("प्रकरण संख्या", "caseNo", "123/2026"));
-      b.appendChild(field("पक्षकार", "party", "राज्य राजस्थान बनाम …………"));
-      b.appendChild(field("धाराएँ", "sections", "धारा 115(2) BNS"));
-      b.appendChild(field("थाना", "ps", "थाना …………"));
-      b.appendChild(field("लोक अभियोजक", "prosecutor", ""));
-      var save = U.el("button", { class: "btn accent block", text: "सहेजें", style: { marginTop: "10px" } });
-      save.addEventListener("click", function () {
-        c.type = sel.value;
-        current.court = c;
-        autosave();
-        U.toast("न्यायालय विवरण सहेजा गया", "ok");
+      E.rerender();
+      E.emitChange(true);
+      updateStats();
+      status(ND.t("templateApplied") || L("Template applied", "प्रारूप लागू हुआ"));
+      if (mode === "replace") {
+        saveDoc(true);
         closePanel();
+      }
+    };
+    if (hasContent() && D.plainText(S.doc).trim().length > 0) {
+      openModal(L("Use this template", "यह प्रारूप लगाएँ"),
+        "<p class='hint'>" + esc(tpl.title) + "</p><p class='hint'>" +
+        L("Replace the current document or add the template below your text?",
+          "वर्तमान दस्तावेज़ बदलें या आपके पाठ के नीचे प्रारूप जोड़ें?") + "</p>", [
+          { label: ND.t("cancel") },
+          { label: L("Insert below", "नीचे जोड़ें"), onClick: function () { doApply("append"); } },
+          { label: L("Replace", "बदलें"), kind: "primary", onClick: function () { doApply("replace"); } }
+        ]);
+    } else {
+      doApply("replace");
+    }
+  }
+
+  /* ----------------------------------------------------------------- insert */
+  var SYMBOLS = ["§", "¶", "†", "‡", "₹", "©", "®", "™", "°", "×", "÷", "√", "≈", "≠", "≤", "≥",
+    "—", "–", "…", "«", "»", "“", "”", "‘", "’", "•", "◦", "▪", "→", "←", "↑", "↓", "✓", "✗"];
+
+  PANELS.insert = function () {
+    var grid = [
+      ["date", L("Current date", "आज की तिथि"), "📅"],
+      ["place", L("Place", "स्थान"), "📍"],
+      ["case", L("Case number", "प्रकरण क्रमांक"), "#"],
+      ["sections", L("Sections", "धाराएँ"), "§"],
+      ["party", L("Party line", "पक्षकार"), "⚖"],
+      ["court", L("Court heading", "न्यायालय शीर्षक"), "🏛"],
+      ["signature", L("Signature block", "हस्ताक्षर खंड"), "✍"],
+      ["pagebreak", L("Page break", "पृष्ठ विराम"), "⤓"],
+      ["hr", L("Horizontal rule", "क्षैतिज रेखा"), "—"],
+      ["table", L("Table", "तालिका"), "▦"],
+      ["image", L("Image", "चित्र"), "🖼"],
+      ["toc", L("Table of contents", "विषय-सूची"), "☰"],
+      ["field", L("Merge field", "मर्ज फ़ील्ड"), "{ }"],
+      ["footnote", L("Footnote", "पाद-टिप्पणी"), "¹"]
+    ];
+    return "<div class='section-title'>" + L("Insert into document", "दस्तावेज़ में जोड़ें") + "</div>" +
+      "<div class='cards'>" + grid.map(function (g) {
+        return "<button class='card' data-act='ins' data-what='" + g[0] + "'><span class='cat'>" + g[2] + "</span><strong>" + esc(g[1]) + "</strong></button>";
+      }).join("") + "</div>" +
+      "<div class='section-title'>" + L("Symbols", "चिह्न") + "</div>" +
+      "<div class='row'>" + SYMBOLS.map(function (s) {
+        return "<button class='chip' data-act='symbol' data-sym='" + esc(s) + "'>" + esc(s) + "</button>";
+      }).join("") + "</div>" +
+      "<div class='section-title'>" + L("Table size", "तालिका आकार") + "</div>" +
+      "<div class='grid-2'><div class='field'><label>" + L("Rows", "पंक्तियाँ") + "</label><input class='input' id='tbRows' type='number' min='1' max='30' value='4'></div>" +
+      "<div class='field'><label>" + L("Columns", "स्तंभ") + "</label><input class='input' id='tbCols' type='number' min='1' max='10' value='3'></div></div>" +
+      "<button class='btn block primary' data-act='ins-table'>" + L("Insert table", "तालिका जोड़ें") + "</button>";
+  };
+
+  function dateText() {
+    var d = new Date();
+    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+    return pad(d.getDate()) + "." + pad(d.getMonth() + 1) + "." + d.getFullYear();
+  }
+
+  function handleInsert(what) {
+    var c = S.doc.court || {};
+    switch (what) {
+      case "date": E.insertTextAtCursor(dateText()); break;
+      case "place":
+        promptModal(L("Place", "स्थान"), L("Court / place name", "न्यायालय स्थान"), c.place || "",
+          function (v) { E.insertTextAtCursor(v); });
+        return;
+      case "case": E.insertTextAtCursor(c.caseNo || "………/" + new Date().getFullYear()); break;
+      case "sections": E.insertTextAtCursor(c.sections || ""); break;
+      case "party": E.insertTextAtCursor(c.party || ""); break;
+      case "court": E.insertTextAtCursor(D.courtName(S.doc)); break;
+      case "signature":
+        E.insertBlock("p", esc(L("Date: " + dateText(), "दिनांक " + dateText())), null, { align: "right" });
+        E.insertBlock("p", esc(L("Signature", "हस्ताक्षर")), null, { align: "right" });
+        break;
+      case "pagebreak": E.insertBlock("pagebreak", ""); break;
+      case "hr": E.insertBlock("hr", ""); break;
+      case "table": {
+        var rows = parseInt((el("tbRows") || {}).value, 10) || 4;
+        var cols = parseInt((el("tbCols") || {}).value, 10) || 3;
+        E.insertTable(rows, cols);
+        status(ND.t("tableInserted"));
+        break;
+      }
+      case "image": pickImage(); break;
+      case "toc":
+        if (!E.insertToc()) status(ND.t("tocEmpty"), "warn");
+        else status(ND.t("tocInserted"));
+        break;
+      case "field": insertField(); break;
+      case "footnote":
+        E.insertHtmlAtCursor("<sup>1</sup> ");
+        E.insertBlock("p", "<span style='font-size:8pt'>" + esc(L("1. …", "1. …")) + "</span>");
+        break;
+    }
+  }
+
+  function pickImage() {
+    if (!ND.native.has()) {
+      var input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.style.display = "none";
+      input.addEventListener("change", function () {
+        var f = input.files && input.files[0];
+        if (!f) return;
+        var r = new FileReader();
+        r.onload = function () {
+          E.insertImage(String(r.result), 70);
+          status(ND.t("imageInserted"));
+        };
+        r.readAsDataURL(f);
+        input.remove();
       });
-      b.appendChild(save);
+      document.body.appendChild(input);
+      input.click();
+      return;
+    }
+    ND.native.pickFile(function (name, b64) {
+      if (!/\.(png|jpe?g|webp|gif)$/i.test(name || "")) {
+        status(L("Choose an image file.", "चित्र फ़ाइल चुनें।"), "warn");
+        return;
+      }
+      E.insertImage("data:image/*;base64," + b64, 70);
+      status(ND.t("imageInserted"));
     });
   }
 
-  /* ------------------------------------------------------------ page & style */
-  function screenPage() {
-    openPanel("पृष्ठ सेटअप", function (b) {
-      var p = current.page;
-      var sizeSel = U.el("select", { class: "input" });
-      Object.keys(D.PAGE_SIZES).forEach(function (k) {
-        var o = U.el("option", { value: k, text: D.PAGE_SIZES[k].label });
-        if (p.size === k) o.selected = true;
-        sizeSel.appendChild(o);
-      });
-      sizeSel.addEventListener("change", function () {
-        p.size = sizeSel.value; E.setDoc(current); autosave();
-      });
-      b.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "पृष्ठ आकार" }), sizeSel]));
+  function insertField() {
+    var vars = ["{{court}}", "{{judge}}", "{{place}}", "{{date}}", "{{year}}", "{{caseNo}}", "{{party}}", "{{sections}}", "{{ps}}", "{{prosecutor}}"];
+    openModal(L("Merge field", "मर्ज फ़ील्ड"),
+      "<p class='hint'>" + L("Fields are filled from Court details when you insert them and when a template is applied.",
+        "फ़ील्ड न्यायालय विवरण से भरते हैं।") + "</p><div class='row'>" +
+      vars.map(function (v) { return "<button class='chip' data-act='pickvar' data-var='" + esc(v) + "'>" + esc(v) + "</button>"; }).join("") + "</div>",
+      [{ label: ND.t("close") }]);
+  }
 
-      var mg = U.el("div", { class: "grid2" });
-      [["top", "ऊपर"], ["right", "दाएँ"], ["bottom", "नीचे"], ["left", "बाएँ"]].forEach(function (x) {
-        var inp = U.el("input", { class: "input", type: "number", step: "1", value: p.margins[x[0]] });
-        inp.addEventListener("change", function () {
-          p.margins[x[0]] = parseFloat(inp.value) || 0;
-          E.setDoc(current); autosave();
-        });
-        mg.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: x[1] + " (मिमी)" }), inp]));
-      });
-      b.appendChild(U.el("h4", { text: "मार्जिन", style: { margin: "12px 0 6px" } }));
-      b.appendChild(mg);
+  /* ----------------------------------------------------------------- layout */
+  PANELS.layout = function () {
+    var p = S.doc.page, st = S.doc.style;
+    var sizes = Object.keys(D.PAGE_SIZES).map(function (k) {
+      return "<option value='" + k + "'" + (p.size === k ? " selected" : "") + ">" + esc(D.PAGE_SIZES[k].label) + "</option>";
+    }).join("");
+    var marginPreset = function (key, label) {
+      return "<button class='chip' data-act='margin-preset' data-preset='" + key + "'>" + esc(label) + "</button>";
+    };
+    var m = p.margins || {};
+    return "<div class='section-title'>" + L("Paper", "कागज़") + "</div>" +
+      "<div class='grid-2'>" +
+      "<div class='field'><label>" + L("Size", "आकार") + "</label><select class='select' data-page='size'>" + sizes + "</select></div>" +
+      "<div class='field'><label>" + L("Orientation", "अभिविन्यास") + "</label><select class='select' data-page='orientation'>" +
+      "<option value='portrait'" + (p.orientation !== "landscape" ? " selected" : "") + ">" + L("Portrait", "उर्ध्व") + "</option>" +
+      "<option value='landscape'" + (p.orientation === "landscape" ? " selected" : "") + ">" + L("Landscape", "भूदृश्य") + "</option></select></div>" +
+      "</div>" +
+      "<div class='section-title'>" + L("Margins (mm)", "हाशिया (मि.मी.)") + "</div>" +
+      "<div class='row' style='margin-bottom:10px'>" +
+      marginPreset("normal", L("Normal", "सामान्य")) + marginPreset("narrow", L("Narrow", "संकीर्ण")) +
+      marginPreset("wide", L("Wide", "चौड़ा")) + marginPreset("court", L("Court", "न्यायालय")) +
+      marginPreset("binder", L("Binder", "बंधन")) + "</div>" +
+      "<div class='grid-4'>" +
+      ["top", "right", "bottom", "left"].map(function (k) {
+        return "<div class='field'><label>" + L(k, { top: "ऊपर", right: "दाएँ", bottom: "नीचे", left: "बाएँ" }[k]) +
+          "</label><input class='input' type='number' step='0.5' min='5' max='60' data-margin='" + k + "' value='" + (m[k] || 25.4) + "'></div>";
+      }).join("") + "</div>" +
+      "<div class='section-title'>" + L("Columns", "स्तंभ") + "</div>" +
+      seg("cols", [{ v: 1, label: "1" }, { v: 2, label: "2" }, { v: 3, label: "3" }], p.columns || 1) +
+      "<div class='section-title'>" + L("Header & footer", "शीर्ष / पाद") + "</div>" +
+      "<div class='field'><label>" + L("Header text", "शीर्ष पाठ") + "</label><input class='input' data-page='headerText' value='" + esc(p.headerText || "") + "' placeholder='" + esc(L("e.g. In the Court of …", "जैसे — न्यायालय श्रीमान …")) + "'></div>" +
+      "<div class='field'><label>" + L("Footer text", "पाद पाठ") + "</label><input class='input' data-page='footerText' value='" + esc(p.footerText || "") + "'></div>" +
+      toggleRow("__page_numbers", L("Page numbers", "पृष्ठ संख्या"), L("Show the page number at the bottom", "नीचे पृष्ठ संख्या दिखाएँ"), p.numbers !== false) +
+      "<div class='field' style='margin-top:10px'><label>" + L("Number format", "संख्या शैली") + "</label><select class='select' data-page='numberFormat'>" +
+      "<option value='n'" + (p.numberFormat === "n" ? " selected" : "") + ">" + L("1", "1") + "</option>" +
+      "<option value='n-of-total'" + (p.numberFormat === "n-of-total" ? " selected" : "") + ">" + L("Page 1 of 4", "पृष्ठ 1 / 4") + "</option>" +
+      "<option value='roman'" + (p.numberFormat === "roman" ? " selected" : "") + ">i, ii, iii</option></select></div>" +
+      toggleRow("__line_numbers", L("Line numbers", "पंक्ति संख्या"), L("Legal pleading line numbering", "विधिक अभिवचन हेतु"), !!p.lineNumbers) +
+      toggleRow("__page_border", L("Page border", "पृष्ठ किनारा"), "", !!p.border) +
+      "<div class='section-title'>" + L("Watermark", "वॉटरमार्क") + "</div>" +
+      "<div class='field'><input class='input' data-page='watermark' value='" + esc(p.watermark || "") + "' placeholder='" + esc(L("e.g. DRAFT", "जैसे — DRAFT")) + "'></div>" +
+      "<div class='row between'><span class='hint'>" + L("Opacity", "पारदर्शिता") + "</span><span class='hint' id='wmVal'>" + Math.round((p.watermarkOpacity === undefined ? 0.08 : p.watermarkOpacity) * 100) + "%</span></div>" +
+      "<input type='range' min='3' max='30' value='" + Math.round((p.watermarkOpacity === undefined ? 0.08 : p.watermarkOpacity) * 100) + "' data-page-range='watermarkOpacity' style='width:100%'>" +
+      "<div class='section-title'>" + L("Typography", "अक्षर-विन्यास") + "</div>" +
+      "<div class='grid-2'>" +
+      "<div class='field'><label>" + L("Font size (pt)", "अक्षर आकार (पॉइंट)") + "</label><input class='input' type='number' min='8' max='36' step='0.5' data-style='size' value='" + (st.size || 12) + "'></div>" +
+      "<div class='field'><label>" + L("Line height", "पंक्ति ऊँचाई") + "</label><input class='input' type='number' min='1' max='3' step='0.05' data-style='lh' value='" + (st.lh || 1.65) + "'></div>" +
+      "<div class='field'><label>" + L("Paragraph gap (pt)", "अनुच्छेद अंतर") + "</label><input class='input' type='number' min='0' max='30' step='1' data-style='paraSpacing' value='" + (st.paraSpacing === undefined ? 6 : st.paraSpacing) + "'></div>" +
+      "<div class='field'><label>" + L("First-line indent", "प्रथम पंक्ति इंडेंट") + "</label><select class='select' data-style='firstLine'><option value='0'" + (!st.firstLine ? " selected" : "") + ">" + L("None", "कोई नहीं") + "</option><option value='1'" + (st.firstLine ? " selected" : "") + ">" + L("On", "हाँ") + "</option></select></div>" +
+      "</div>" +
+      "<div class='section-title'>" + L("View", "दृश्य") + "</div>" +
+      seg("pageview", [{ v: "paged", label: L("Paged", "पृष्ठ") }, { v: "continuous", label: L("Continuous", "सतत") }], ND.prefs.pageView || "paged") +
+      "<div style='height:8px'></div>" +
+      toggleRow("ruler", L("Show ruler", "रूलर दिखाएँ"), "", ND.prefs.ruler !== false) +
+      toggleRow("showMarks", L("Show paragraph marks", "अनुच्छेद चिह्न"), "", !!ND.prefs.showMarks) +
+      "<div class='section-title'>" + L("Zoom", "ज़ूम") + "</div>" +
+      seg("zoom", [{ v: 0.8, label: "80%" }, { v: 1, label: "100%" }, { v: 1.25, label: "125%" }, { v: 1.5, label: "150%" }], S.zoom);
+  };
 
-      var sw = U.el("div", { class: "setrow" }, [
-        U.el("div", { class: "lbl" }, [U.el("strong", { text: "पृष्ठ क्रमांक" }), U.el("small", { text: "प्रत्येक पृष्ठ के नीचे" })]),
-        toggle(p.numbers !== false, function (v) { p.numbers = v; E.setDoc(current); autosave(); })
-      ]);
-      b.appendChild(sw);
-      b.appendChild(U.el("p", { class: "hint", text: "राजस्थान न्यायालयों में सामान्यतः A4, मार्जिन 25.4 मिमी (1 इंच) का उपयोग होता है।" }));
+  function setPage(key, value) {
+    S.doc.page[key] = value;
+    E.rerender();
+    applyDocMeta();
+    saveDoc();
+  }
+
+  function setStyle(key, value) {
+    S.doc.style[key] = key === "size" || key === "lh" || key === "paraSpacing" ? Number(value) : value;
+    E.rerender();
+    applyDocMeta();
+    saveDoc();
+  }
+
+  /* ------------------------------------------------------------------ tools */
+  PANELS.tools = function () {
+    var st = D.stats(S.doc);
+    return "<div class='section-title'>" + L("Text case", "पाठ का रूप") + "</div>" +
+      "<div class='grid-2'>" +
+      "<button class='btn' data-act='case' data-mode='upper'>UPPER CASE</button>" +
+      "<button class='btn' data-act='case' data-mode='lower'>lower case</button>" +
+      "<button class='btn' data-act='case' data-mode='title'>Title Case</button>" +
+      "<button class='btn' data-act='case' data-mode='sentence'>Sentence case</button>" +
+      "</div>" +
+      "<div class='section-title'>" + L("Clean up", "सफ़ाई") + "</div>" +
+      "<div class='list'>" +
+      actionRow(L("Fix Devanagari matras", "देवनागरी मात्राएँ सुधारें"), L("Repairs गि/कि order and nukta slips", "गि/कि क्रम एवं नुक़्ता सुधार"), "fix-matras") +
+      actionRow(L("Smart quotes", "स्मार्ट उद्धरण"), L("Straight quotes → “ ” ‘ ’", "सीधे उद्धरण → “ ” ‘ ’"), "smart-quotes") +
+      actionRow(L("Collapse extra spaces", "अतिरिक्त स्पेस हटाएँ"), L("Tidy runs of spaces and blank lines", "खाली पंक्तियाँ व स्पेस"), "collapse-spaces") +
+      actionRow(L("Sort lines A→Z", "पंक्तियाँ क्रम में"), L("Sorts the selected paragraphs", "चयनित अनुच्छेद क्रमबद्ध"), "sort-lines") +
+      actionRow(L("Transliterate Hindi → Roman", "हिन्दी → रोमन"), L("Readable transliteration of the selection", "चयन का रोमन रूपांतरण"), "translit") +
+      "</div>" +
+      "<div class='section-title'>" + L("Find & replace", "खोजें व बदलें") + "</div>" +
+      "<button class='btn block' data-act='find'>" + L("Open find bar", "खोज पट्टी खोलें") + "</button>" +
+      "<div class='section-title'>" + L("Document", "दस्तावेज़") + "</div>" +
+      "<div class='list'>" +
+      actionRow(L("Select all", "सब चुनें"), L("Ctrl + A", "Ctrl + A"), "select-all") +
+      actionRow(L("Word & character count", "शब्द व अक्षर गणना"), ND.t("textStats", { words: st.words, chars: st.chars }), "stats") +
+      actionRow(L("Spell check the document", "दस्तावेज़ की वर्तनी जाँच"), "", "spell-all") +
+      "</div>";
+  };
+
+  function selectionText() {
+    var sel = window.getSelection();
+    return sel && sel.rangeCount && E.state.pagesEl.contains(sel.anchorNode) ? sel.toString() : "";
+  }
+
+  function transformSelection(fn) {
+    var text = selectionText();
+    if (!text) { status(L("Select some text first.", "पहले पाठ चुनें।"), "warn"); return; }
+    E.applyToSelection(function () {
+      document.execCommand("insertText", false, fn(text));
     });
   }
 
-  function toggle(on, onChange) {
-    var t = U.el("div", { class: "switch" + (on ? " on" : "") }, [U.el("i")]);
-    t.addEventListener("click", function () {
-      var v = !t.classList.contains("on");
-      t.classList.toggle("on", v);
-      onChange(v);
-    });
-    return t;
-  }
-
-  function screenDisplay() {
-    openPanel("फ़ॉन्ट, आकार व थीम", function (b) {
-      var st = current.style;
-      var fonts = [["serif", "Noto Serif देवनागरी (न्यायालयीन)"], ["sans", "Noto Sans देवनागरी (स्पष्ट)"], ["tiro", "Tiro देवनागरी (पारंपरिक)"], ["mono", "मशीन (Mono)"]];
-      var fsel = U.el("select", { class: "input" });
-      fonts.forEach(function (f) {
-        var o = U.el("option", { value: f[0], text: f[1] });
-        if (st.font === f[0]) o.selected = true;
-        fsel.appendChild(o);
-      });
-      fsel.addEventListener("change", function () { st.font = fsel.value; E.setDoc(current); autosave(); });
-      b.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "हिन्दी फ़ॉन्ट" }), fsel]));
-
-      var size = U.el("input", { class: "input", type: "range", min: "9", max: "24", step: "0.5", value: st.size });
-      var sizeVal = U.el("span", { text: st.size + " pt", style: { fontSize: "12px", color: "var(--ink-soft)" } });
-      size.addEventListener("input", function () { sizeVal.textContent = size.value + " pt"; });
-      size.addEventListener("change", function () { st.size = parseFloat(size.value); E.setDoc(current); autosave(); });
-      b.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "अक्षर आकार" }), size, sizeVal]));
-
-      var lh = U.el("input", { class: "input", type: "range", min: "1.2", max: "2.4", step: "0.05", value: st.lh });
-      var lhVal = U.el("span", { text: String(st.lh), style: { fontSize: "12px", color: "var(--ink-soft)" } });
-      lh.addEventListener("input", function () { lhVal.textContent = lh.value; });
-      lh.addEventListener("change", function () { st.lh = parseFloat(lh.value); E.lineHeight(st.lh); autosave(); });
-      b.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "पंक्ति अंतर" }), lh, lhVal]));
-
-      b.appendChild(U.el("h4", { text: "थीम", style: { margin: "14px 0 4px" } }));
-      var themes = [["auto", "स्वतः (सिस्टम)"], ["light", "हल्का"], ["dark", "गहरा"]];
-      var tsel = U.el("select", { class: "input" });
-      themes.forEach(function (t) {
-        var o = U.el("option", { value: t[0], text: t[1] });
-        if (S.theme === t[0]) o.selected = true;
-        tsel.appendChild(o);
-      });
-      tsel.addEventListener("change", function () {
-        S.theme = tsel.value; ND.settings.set("theme", tsel.value);
-        document.documentElement.setAttribute("data-theme", tsel.value === "auto" ? "" : tsel.value);
-      });
-      b.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "रंग योजना" }), tsel]));
-
-      b.appendChild(U.el("div", { class: "setrow" }, [
-        U.el("div", { class: "lbl" }, [U.el("strong", { text: "स्वतः वर्तनी जाँच" }), U.el("small", { text: "गलत शब्दों के नीचे लाल रेखा" })]),
-        toggle(!!S.autoSpell, function (v) { ND.settings.set("autoSpell", v); })
-      ]));
-      b.appendChild(U.el("div", { class: "setrow" }, [
-        U.el("div", { class: "lbl" }, [U.el("strong", { text: "स्वतः सहेजें" }), U.el("small", { text: "प्रत्येक परिवर्तन पर" })]),
-        toggle(!!S.autosave, function (v) { ND.settings.set("autosave", v); })
-      ]));
-      b.appendChild(U.el("div", { class: "setrow" }, [
-        U.el("div", { class: "lbl" }, [U.el("strong", { text: "पृष्ठ क्रमांक" }), U.el("small", { text: "पाद लेख" })]),
-        toggle(current.page.numbers !== false, function (v) { current.page.numbers = v; E.setDoc(current); autosave(); })
-      ]));
+  function toTitleCase(s) {
+    return s.replace(/\S+/g, function (w) {
+      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
     });
   }
 
-  /* ---------------------------------------------------------------- dictionary */
-  var dictTab = "hi";
+  function toSentenceCase(s) {
+    return s.toLowerCase().replace(/(^\s*\w|[.!?।]\s*\w)/g, function (m) { return m.toUpperCase(); });
+  }
 
-  function screenDict(initial) {
-    openPanel("हिन्दी–अंग्रेज़ी शब्दकोश", function (b) {
-      var tabs = U.el("div", { class: "tabs" });
-      var t1 = U.el("button", { text: "हिन्दी → अंग्रेज़ी", class: dictTab === "hi" ? "on" : "" });
-      var t2 = U.el("button", { text: "English → हिन्दी", class: dictTab === "en" ? "on" : "" });
-      tabs.appendChild(t1); tabs.appendChild(t2);
+  function fixMatrasEverywhere() {
+    var changed = 0;
+    E.pushUndo();
+    S.doc.blocks.forEach(function (b) {
+      if (!b.html || !U.hasDevanagari(U.stripTags(b.html))) return;
+      var parts = b.html.split(/(<[^>]+>)/);
+      var out = parts.map(function (p) {
+        if (p.charAt(0) === "<") return p;
+        var fixed = T.fixMatras(p);
+        if (fixed !== p) changed++;
+        return fixed;
+      }).join("");
+      b.html = out;
+    });
+    E.rerender();
+    E.emitChange(true);
+    status(changed ? ND.t("fixedMatras") : L("Nothing to fix", "सुधारने को कुछ नहीं"), changed ? "ok" : "warn");
+  }
 
-      var search = U.el("input", { class: "input", placeholder: "शब्द लिखें…", value: initial || "" });
-      var results = U.el("div", { style: { marginTop: "10px" } });
-      b.appendChild(tabs);
-      b.appendChild(U.el("div", { class: "dict-search" }, [search]));
+  function smartQuotesEverywhere() {
+    E.pushUndo();
+    var count = 0;
+    S.doc.blocks.forEach(function (b) {
+      if (!b.html) return;
+      var parts = b.html.split(/(<[^>]+>)/);
+      b.html = parts.map(function (p) {
+        if (p.charAt(0) === "<") return p;
+        var n = p.replace(/(^|[\s([{])"/g, "$1“").replace(/"/g, "”").replace(/(^|[\s([{])'/g, "$1‘").replace(/'/g, "’");
+        if (n !== p) count++;
+        return n;
+      }).join("");
+    });
+    E.rerender();
+    E.emitChange(true);
+    status(L("Smart quotes applied", "स्मार्ट उद्धरण लागू"), "ok");
+  }
 
-      t1.addEventListener("click", function () { dictTab = "hi"; t1.classList.add("on"); t2.classList.remove("on"); run(); });
-      t2.addEventListener("click", function () { dictTab = "en"; t2.classList.add("on"); t1.classList.remove("on"); run(); });
+  function collapseSpaces() {
+    E.pushUndo();
+    S.doc.blocks.forEach(function (b) {
+      if (!b.html) return;
+      if (b.type === "table" || b.type === "image" || b.type === "toc") return;
+      b.html = b.html.replace(/&nbsp;|\u00a0/g, " ").replace(/ {2,}/g, " ").trim();
+    });
+    E.rerender();
+    E.emitChange(true);
+  }
 
-      var loadNote = U.el("p", { class: "hint", text: ND.dict.ready ? "" : "शब्दकोश लोड हो रहा है…" });
-      b.appendChild(loadNote);
-      b.appendChild(results);
+  function sortLines() {
+    var text = selectionText();
+    if (!text) { status(L("Select paragraphs to sort.", "क्रमबद्ध करने हेतु अनुच्छेद चुनें।"), "warn"); return; }
+    var sorted = text.split(/\n/).filter(function (s) { return s.trim(); })
+      .sort(function (a, b) { return a.localeCompare(b, ND.lang() === "hi" ? "hi" : "en"); }).join("\n");
+    E.applyToSelection(function () { document.execCommand("insertText", false, sorted); });
+  }
 
-      function run() {
-        var q = search.value.trim();
-        results.innerHTML = "";
-        if (!q) {
-          results.appendChild(U.el("p", { class: "hint", text: dictTab === "hi"
-            ? "हिन्दी शब्द लिखें — अर्थ, पर्यायवाची एवं विधिक अंग्रेज़ी शब्द मिलेंगे।"
-            : "अंग्रेज़ी शब्द लिखें — हिन्दी विधिक शब्द मिलेंगे।" }));
-          return;
+  /* ------------------------------------------------------------- dictionary */
+  PANELS.dictionary = function () {
+    return "<div class='dict-search'><input class='input' id='dictInput' placeholder='" +
+      esc(L("Hindi or English word…", "हिन्दी या अंग्रेज़ी शब्द…")) + "' value='" + esc(S.dictQuery) + "'>" +
+      "<button class='btn' data-act='dict-go'>" + L("Look up", "खोजें") + "</button></div>" +
+      (S.dictReady ? "" : "<p class='hint warn'>" + L("Dictionary is loading…", "शब्दकोश लोड हो रहा है…") + "</p>") +
+      "<div id='dictResults'>" + dictResultsHtml() + "</div>";
+  };
+  AFTER.dictionary = function () {
+    var i = el("dictInput");
+    if (i) { i.focus(); }
+  };
+
+  function dictResultsHtml() {
+    if (!S.dictQuery) {
+      var st = ND.dict.ready ? ND.dict.stats() : { hindi: 0, english: 0, legal: (ND.LEGAL || []).length };
+      return "<div class='hint'>" + L("Offline dictionary: {h} Hindi words, {e} English words, {g} legal terms.",
+        "ऑफ़लाइन शब्दकोश: {h} हिन्दी शब्द, {e} अंग्रेज़ी शब्द, {g} विधिक शब्द।")
+        .replace("{h}", st.hindi.toLocaleString("en-IN")).replace("{e}", st.english.toLocaleString("en-IN")).replace("{g}", st.legal) +
+        "<br><br>" + L("Tap any word below to explore the legal glossary.", "नीचे किसी शब्द पर टैप करें।") + "</div>" +
+        "<div class='row' style='margin-top:10px'>" + (ND.LEGAL || []).slice(0, 12).map(function (e) {
+          return "<button class='chip' data-act='dict-word' data-word='" + esc(e.h) + "'>" + esc(e.h) + "</button>";
+        }).join("") + "</div>";
+    }
+    var results = S.dictResults || [];
+    if (!results.length) {
+      return "<div class='empty'>" + L("No match. Try a shorter word.", "कोई परिणाम नहीं। छोटा शब्द आज़माएँ।") + "</div>";
+    }
+    return results.map(function (r) {
+      var head = r.h ?
+        "<span class='hw' style='font-family:var(--ui-dev)'>" + esc(r.h) + "</span>" + (r.e ? "<span class='en'>" + esc(r.e) + "</span>" : "") :
+        "<span class='hw'>" + esc(r.e || "") + "</span>";
+      return "<div class='dict-entry'><div class='head'>" + head +
+        "<span class='meta'>" + esc(r.src || "") + "</span></div>" +
+        (r.g ? "<div class='gloss'>" + esc(r.g) + "</div>" : "") +
+        (r.h ? "<div class='row' style='margin-top:6px'><button class='sug' data-act='dict-insert' data-word='" + esc(r.h) + "'>" + L("Insert", "जोड़ें") + "</button>" +
+          "<button class='sug' data-act='dict-save' data-word='" + esc(r.h) + "'>" + L("Add to dictionary", "शब्दकोश में जोड़ें") + "</button></div>" : "") +
+        "</div>";
+    }).join("");
+  }
+
+  function runDictLookup(q) {
+    S.dictQuery = String(q || "").trim();
+    if (!S.dictQuery) { S.dictResults = []; }
+    else if (!ND.dict.ready) { S.dictResults = []; }
+    else {
+      S.dictResults = ND.dict.search(S.dictQuery, 60);
+      var exactHi = ND.dict.lookupHindi(S.dictQuery);
+      if (exactHi.legal && !S.dictResults.some(function (r) { return r.h === exactHi.legal.h && r.g; })) {
+        S.dictResults.unshift({ h: exactHi.legal.h, e: exactHi.legal.e, g: exactHi.legal.g, src: L("Legal glossary", "विधिक शब्दावली") });
+      }
+      var exactEn = ND.dict.lookupEnglish(S.dictQuery);
+      exactEn.entries.slice(0, 6).forEach(function (e) {
+        if (!S.dictResults.some(function (r) { return r.h === e.h; })) {
+          S.dictResults.unshift({ h: e.h, e: e.e, g: e.g, src: L("Legal glossary", "विधिक शब्दावली") });
         }
-        if (!ND.dict.ready) { ND.dict.load().then(run); return; }
-        if (dictTab === "hi") {
-          ND.dict.loadGloss().then(function () {
-            var entry = ND.dict.lookupHindi(q);
-            var head = U.el("div", { class: "dict-entry" });
-            var hh = U.el("div", { class: "head" }, [U.el("span", { class: "hw", text: q })]);
-            if (entry.legal) hh.appendChild(U.el("span", { class: "en", text: entry.legal.e }));
-            head.appendChild(hh);
-            if (entry.legal && entry.legal.g) head.appendChild(U.el("div", { class: "gloss", text: entry.legal.g }));
-            entry.gloss.forEach(function (g) {
-              head.appendChild(U.el("div", { class: "gloss", text: g.text }));
-              head.appendChild(U.el("div", { class: "meta", text: "स्रोत: " + g.src }));
-            });
-            if (!entry.legal && !entry.gloss.length) {
-              head.appendChild(U.el("div", { class: "gloss", text: "इस शब्द की प्रविष्टि नहीं मिली। नीचे मिलते-जुलते शब्द देखें।" }));
-            }
-            results.appendChild(head);
-
-            var sugs = ND.dict.suggest(q, 10);
-            if (sugs.length) {
-              var box = U.el("div", { style: { marginTop: "8px" } }, [U.el("div", { class: "hint", text: "मिलते-जुलते शब्द:" })]);
-              sugs.forEach(function (w) {
-                var chip = U.el("button", { class: "dict-chip", text: w });
-                chip.addEventListener("click", function () { search.value = w; run(); });
-                box.appendChild(chip);
-              });
-              results.appendChild(box);
-            }
-            var list = ND.dict.search(q, 20);
-            if (list.length) {
-              results.appendChild(U.el("h4", { text: "अन्य प्रविष्टियाँ", style: { margin: "14px 0 4px", fontSize: "13px" } }));
-              list.forEach(function (r) {
-                var row = U.el("div", { class: "dict-entry" });
-                var h = U.el("div", { class: "head" }, [U.el("span", { class: "hw", text: r.h || "—" })]);
-                if (r.e) h.appendChild(U.el("span", { class: "en", text: r.e }));
-                row.appendChild(h);
-                if (r.g) row.appendChild(U.el("div", { class: "gloss", text: r.g }));
-                row.addEventListener("click", function () { search.value = r.h || r.e; run(); });
-                results.appendChild(row);
-              });
-            }
-            var insert = U.el("button", { class: "btn sm", text: "दस्तावेज़ में जोड़ें", style: { marginTop: "10px" } });
-            insert.addEventListener("click", function () {
-              E.insertTextAtCursor(q);
-              U.toast("जोड़ा गया", "ok");
-            });
-            results.appendChild(insert);
-          });
-        } else {
-          var e = ND.dict.lookupEnglish(q);
-          if (!e.entries.length) {
-            results.appendChild(U.el("p", { class: "hint", text: "यह अंग्रेज़ी शब्द विधिक शब्दावली में नहीं मिला। नीचे सुझाव देखें।" }));
-            var sug2 = ND.dict.suggest(q, 12);
-            var box2 = U.el("div", { style: { marginTop: "6px" } });
-            sug2.forEach(function (w) {
-              var chip = U.el("button", { class: "dict-chip", text: w });
-              chip.addEventListener("click", function () { search.value = w; run(); });
-              box2.appendChild(chip);
-            });
-            results.appendChild(box2);
-          }
-          e.entries.forEach(function (row) {
-            var d = U.el("div", { class: "dict-entry" });
-            d.appendChild(U.el("div", { class: "head" }, [
-              U.el("span", { class: "hw", text: row.h }),
-              U.el("span", { class: "en", text: row.e })
-            ]));
-            if (row.g) d.appendChild(U.el("div", { class: "gloss", text: row.g }));
-            results.appendChild(d);
-          });
-        }
-      }
-      search.addEventListener("input", U.debounce(run, 220));
-      search.addEventListener("keydown", function (ev) { if (ev.key === "Enter") run(); });
-      if (!ND.dict.ready) ND.dict.load().then(run);
-      else run();
-    });
+      });
+    }
+    var box = el("dictResults");
+    if (box) box.innerHTML = dictResultsHtml();
   }
 
-  /* ------------------------------------------------------------------- spell */
-  function screenSpell() {
-    openPanel("वर्तनी जाँचक", function (b) {
-      var out = U.el("div");
-      b.appendChild(U.el("p", { class: "hint", text: "पूरे दस्तावेज़ की हिन्दी एवं अंग्रेज़ी वर्तनी की जाँच करें। शब्दकोश पूर्णतः ऑफ़लाइन है।" }));
-      var run = U.el("button", { class: "btn accent block", text: "जाँच शुरू करें", style: { margin: "10px 0" } });
-      b.appendChild(run);
-      b.appendChild(out);
+  /* ------------------------------------------------------------------ spell */
+  PANELS.spell = function () {
+    return "<div class='row' style='margin-bottom:12px'>" +
+      "<button class='btn primary' data-act='spell-run'>" + L("Check document", "दस्तावेज़ जाँचें") + "</button>" +
+      "<button class='btn' data-act='spell-live'>" + (ND.prefs.autoSpell ? L("Live: on", "लाइव: चालू") : L("Live: off", "लाइव: बंद")) + "</button></div>" +
+      "<p class='hint'>" + L("Checked against the offline Hindi WordNet lexicon and an English word list. Legal terms and acronyms are recognised.",
+        "ऑफ़लाइन हिन्दी वर्डनेट व अंग्रेज़ी शब्द-सूची से जाँच। विधिक शब्द व संक्षेपाक्षर मान्य हैं।") + "</p>" +
+      "<div id='spellList'>" + spellListHtml() + "</div>" +
+      "<div class='section-title'>" + L("Personal dictionary", "व्यक्तिगत शब्दकोश") + "</div>" +
+      "<div class='row' id='userDictRow'>" + userWordsHtml() + "</div>" +
+      "<div class='row' style='margin-top:10px'><input class='input' id='udInput' placeholder='" + esc(L("Add a word…", "शब्द जोड़ें…")) + "' style='flex:1'>" +
+      "<button class='btn' data-act='ud-add'>" + ND.t("add") + "</button></div>";
+  };
 
-      run.addEventListener("click", function () {
-        out.innerHTML = "";
-        U.toast("जाँच हो रही है…", "", 1200);
-        ND.dict.load().then(function () {
-          var found = [];
-          current.blocks.forEach(function (blk) {
-            var text = U.stripTags(blk.html);
-            ND.dict.checkText(text).forEach(function (i) { found.push({ blk: blk, it: i }); });
-          });
-          if (!found.length) {
-            out.appendChild(U.el("div", { class: "empty-state", text: "कोई वर्तनी त्रुटि नहीं मिली ✓" }));
-            return;
-          }
-          out.appendChild(U.el("p", { class: "hint", text: found.length + " संभावित त्रुटियाँ मिलीं" }));
-          var list = U.el("div");
-          found.slice(0, 120).forEach(function (f) {
-            var item = U.el("div", { class: "spell-item" });
-            var bad = U.el("div", { class: "bad", text: f.it.word });
-            var right = U.el("div", { class: "grow" });
-            var sugs = U.el("div", { class: "sugs" });
-            var sugg = ND.dict.suggest(f.it.word, 5);
-            if (!sugg.length) sugs.appendChild(U.el("span", { class: "hint", text: "कोई सुझाव नहीं" }));
-            sugg.forEach(function (s) {
-              var chip = U.el("button", { class: "sug", text: s });
-              chip.addEventListener("click", function () {
-                E.replaceInBlock(f.blk.id, f.it.index, f.it.length, s);
-                chip.classList.add("on");
-                chip.style.background = "var(--accent)";
-                chip.style.color = "#fff";
-              });
-              sugs.appendChild(chip);
-            });
-            var addBtn = U.el("button", { class: "sug", text: "＋ शब्दकोश" });
-            addBtn.addEventListener("click", function () {
-              ND.dict.addUserWord(f.it.word);
-              U.toast("शब्दकोश में जोड़ा: " + f.it.word, "ok");
-            });
-            var goBtn = U.el("button", { class: "sug", text: "जाएँ" });
-            goBtn.addEventListener("click", function () { E.gotoBlock(f.blk.id); });
-            var tools = U.el("div", { class: "sugs", style: { marginTop: "4px" } }, [addBtn, goBtn]);
-            right.appendChild(sugs);
-            right.appendChild(tools);
-            item.appendChild(bad);
-            item.appendChild(right);
-            list.appendChild(item);
-          });
-          out.appendChild(list);
-        });
-      });
-    });
+  function userWordsHtml() {
+    var keys = Object.keys(ND.dict.user || {});
+    if (!keys.length) return "<span class='hint'>" + L("No personal words yet.", "अभी कोई व्यक्तिगत शब्द नहीं।") + "</span>";
+    return keys.map(function (k) {
+      return "<button class='chip' data-act='ud-del' data-word='" + esc(k) + "'>" + esc(k) + " ×</button>";
+    }).join("");
   }
 
-  /* --------------------------------------------------------------- converter */
-  var convState = { from: "krutidev", to: "unicode", dir: "u2d" };
-
-  function screenConvert(seedText) {
-    openPanel("कृतिदेव / लीगेसी कन्वर्टर", function (b) {
-      var fontSel = U.el("select", { class: "input" });
-      [["krutidev", "कृतिदेव 010/016"], ["devlys", "देवलीस 010"], ["chanakya", "चाणक्य"], ["remington", "रेमिंग्टन / कुंडली / आगरा"]]
-        .forEach(function (f) { fontSel.appendChild(U.el("option", { value: f[0], text: f[1] })); });
-
-      var inp = U.el("textarea", { class: "area", placeholder: "यहाँ पुराने फ़ॉन्ट का पाठ चिपकाएँ (जैसे U;k;ky;)" });
-      var out = U.el("textarea", { class: "area", placeholder: "यूनिकोड परिणाम यहाँ दिखेगा", readonly: true });
-      if (seedText) inp.value = seedText;
-
-      var dirRow = U.el("div", { class: "rowline", style: { marginBottom: "8px" } });
-      var b1 = U.el("button", { class: "btn sm primary", text: "कृतिदेव → यूनिकोड" });
-      var b2 = U.el("button", { class: "btn sm", text: "यूनिकोड → कृतिदेव" });
-      dirRow.appendChild(b1); dirRow.appendChild(b2);
-
-      function doConvert() {
-        var v = inp.value;
-        if (!v) { out.value = ""; return; }
-        out.value = convState.dir === "u2d"
-          ? T.convertLegacy(v, fontSel.value)
-          : T.unicodeToKruti(v);
-      }
-      b1.addEventListener("click", function () { convState.dir = "u2d"; b1.classList.add("primary"); b2.classList.remove("primary"); doConvert(); });
-      b2.addEventListener("click", function () { convState.dir = "d2u"; b2.classList.add("primary"); b1.classList.remove("primary"); doConvert(); });
-
-      inp.addEventListener("input", U.debounce(doConvert, 200));
-      fontSel.addEventListener("change", doConvert);
-
-      var wrap = U.el("div", { class: "conv-wrap" });
-      wrap.appendChild(inp);
-      wrap.appendChild(out);
-      b.appendChild(dirRow);
-      b.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "स्रोत फ़ॉन्ट" }), fontSel]));
-      b.appendChild(wrap);
-
-      var actions = U.el("div", { class: "rowline", style: { marginTop: "10px" } });
-      var copyBtn = U.el("button", { class: "btn sm", text: "प्रतिलिपि" });
-      copyBtn.addEventListener("click", function () {
-        out.select();
-        document.execCommand("copy");
-        U.toast("कॉपी हो गया", "ok");
-      });
-      var insBtn = U.el("button", { class: "btn sm accent", text: "दस्तावेज़ में जोड़ें" });
-      insBtn.addEventListener("click", function () {
-        E.insertTextAtCursor(out.value || inp.value);
-        U.toast("दस्तावेज़ में जोड़ा गया", "ok");
-      });
-      var pasteBtn = U.el("button", { class: "btn sm", text: "क्लिपबोर्ड से" });
-      pasteBtn.addEventListener("click", function () {
-        if (navigator.clipboard && navigator.clipboard.readText) {
-          navigator.clipboard.readText().then(function (t) { inp.value = t; doConvert(); });
-        } else U.toast("क्लिपबोर्ड उपलब्ध नहीं — Ctrl+V से चिपकाएँ", "warn");
-      });
-      actions.appendChild(copyBtn); actions.appendChild(insBtn); actions.appendChild(pasteBtn);
-      b.appendChild(actions);
-      b.appendChild(U.el("p", { class: "hint", style: { marginTop: "10px" },
-        text: "चाणक्य/रेमिंग्टन रूपांतरण प्रायोगिक हैं — परिणाम जाँचकर ही प्रयोग करें। कृतिदेव 010/016 पूर्णतः समर्थित है।" }));
-      doConvert();
-    });
+  function spellListHtml() {
+    if (!S.spellIssues) {
+      return "<div class='hint'>" + (ND.dict.ready ? L("Tap “Check document” to start.", "शुरू करने हेतु “दस्तावेज़ जाँचें” दबाएँ।") : L("Loading dictionary…", "शब्दकोश लोड हो रहा है…")) + "</div>";
+    }
+    if (!S.spellIssues.length) {
+      return "<div class='empty' style='color:var(--ok)'>" + L("No spelling mistakes found.", "कोई वर्तनी त्रुटि नहीं मिली।") + "</div>";
+    }
+    return "<div class='hint' style='margin-bottom:6px'>" + S.spellIssues.length + " " +
+      L("words to review", "शब्द जाँचने योग्य") + "</div>" +
+      S.spellIssues.map(function (it, i) {
+        var sugs = (it.suggestions || []).slice(0, 5).map(function (s) {
+          return "<button class='sug' data-act='spell-fix' data-i='" + i + "' data-word='" + esc(s) + "'>" + esc(s) + "</button>";
+        }).join("");
+        return "<div class='spell-item'><div class='bad'>" + esc(it.word) + "</div><div class='sugs'>" +
+          (sugs || "<span class='hint'>" + L("no suggestions", "सुझाव नहीं") + "</span>") +
+          "<button class='sug' data-act='spell-add' data-i='" + i + "'>+ " + L("Add", "जोड़ें") + "</button>" +
+          "<button class='sug' data-act='spell-goto' data-i='" + i + "'>↗</button></div></div>";
+      }).join("");
   }
 
-  /* ----------------------------------------------------------- transliteration */
-  function screenTranslit() {
-    openPanel("लिप्यंतरण — रोमन से हिन्दी टाइपिंग", function (b) {
-      var inp = U.el("textarea", { class: "area", placeholder: "yahan roman mein likhen… (jaise: nyayalaya mein aapaka swagat hai)" });
-      var out = U.el("textarea", { class: "area", readonly: true, placeholder: "हिन्दी परिणाम" });
-      function go() { out.value = T.romanToDevanagari(inp.value); }
-      inp.addEventListener("input", U.debounce(go, 120));
-      var back = U.el("button", { class: "btn sm", text: "हिन्दी → रोमन" });
-      back.addEventListener("click", function () {
-        var tmp = inp.value; inp.value = out.value; out.value = T.devanagariToRoman(tmp);
+  function runSpell() {
+    if (!ND.dict.ready) { status(L("Dictionary still loading…", "शब्दकोश लोड हो रहा है…"), "warn"); return; }
+    E.syncAll();
+    var issues = [], seen = {};
+    S.doc.blocks.forEach(function (b) {
+      if (!b.html || b.type === "image" || b.type === "table") return;
+      var text = U.stripTags(b.html).replace(/\u00a0/g, " ");
+      ND.dict.checkText(text).forEach(function (it) {
+        var key = it.word;
+        if (seen[key]) return;
+        seen[key] = 1;
+        it.blockId = b.id;
+        it.suggestions = ND.dict.suggest(it.word, 6);
+        issues.push(it);
       });
-      var ins = U.el("button", { class: "btn sm accent", text: "दस्तावेज़ में जोड़ें" });
-      ins.addEventListener("click", function () { E.insertTextAtCursor(out.value); U.toast("जोड़ा गया", "ok"); });
-      b.appendChild(inp);
-      b.appendChild(U.el("div", { class: "rowline", style: { margin: "8px 0" } }, [back, ins]));
-      b.appendChild(out);
-      b.appendChild(U.el("p", { class: "hint", style: { marginTop: "8px" },
-        text: "नियम: aa = आ · ii = ई · uu = ऊ · M = ं · ~ = ँ · \\ = हलंत। उदाहरण: ‘raajasthaan’ → राजस्थान।" }));
-      go();
     });
+    S.spellIssues = issues;
+    var box = el("spellList");
+    if (box) box.innerHTML = spellListHtml();
+    if (!issues.length) status(L("No spelling mistakes found.", "कोई वर्तनी त्रुटि नहीं मिली।"));
   }
 
-  /* --------------------------------------------------------------- matra fixer */
-  function screenTypo() {
-    openPanel("मात्रा-सुधारक", function (b) {
-      var inp = U.el("textarea", { class: "area", placeholder: "जहाँ मात्राएँ उलटी हों या रूपांतरण में गड़बड़ी हो, वह पाठ यहाँ चिपकाएँ" });
-      var out = U.el("textarea", { class: "area", readonly: true });
-      var info = U.el("p", { class: "hint" });
-      function go() {
-        var fixed = T.fixTypos(inp.value);
-        out.value = fixed;
-        info.textContent = inp.value ? (T.diffCount(inp.value, fixed) + " स्थानों पर सुधार") : "";
-      }
-      inp.addEventListener("input", U.debounce(go, 200));
-      var ins = U.el("button", { class: "btn sm accent", text: "दस्तावेज़ में जोड़ें" });
-      ins.addEventListener("click", function () { E.insertTextAtCursor(out.value); U.toast("जोड़ा गया", "ok"); });
-      var fixDoc = U.el("button", { class: "btn sm", text: "पूरे दस्तावेज़ पर लगाएँ" });
-      fixDoc.addEventListener("click", function () {
-        E.pushUndo();
-        current.blocks.forEach(function (blk) {
-          if (blk.type === "pagebreak") return;
-          var plain = U.stripTags(blk.html);
-          var fixed = T.fixTypos(plain);
-          if (fixed !== plain) blk.html = U.escapeHtml(fixed);
-        });
-        E.setDoc(current);
-        autosave();
-        U.toast("मात्रा सुधार लागू किया गया", "ok");
-      });
-      b.appendChild(inp);
-      b.appendChild(U.el("div", { class: "rowline", style: { margin: "8px 0" } }, [ins, fixDoc]));
-      b.appendChild(out);
-      b.appendChild(info);
-      go();
+  function replaceWord(oldWord, newWord) {
+    E.pushUndo();
+    var n = 0;
+    S.doc.blocks.forEach(function (b) {
+      if (!b.html) return;
+      var plain = U.stripTags(b.html);
+      if (plain.indexOf(oldWord) < 0) return;
+      b.html = b.html.replace(new RegExp(escRe(oldWord), "g"), esc(newWord));
+      n++;
     });
+    E.rerender();
+    E.emitChange(true);
+    if (n) status(L("Replaced", "बदला गया"));
   }
 
-  /* -------------------------------------------------------------------- voice */
-  var recognition = null, voiceTarget = "append", listening = false;
+  function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-  function startVoice(lang, onText, onEnd) {
+  /* ------------------------------------------------------------------ voice */
+  PANELS.voice = function () {
+    return "<div class='cards' style='grid-template-columns:1fr 1fr'>" +
+      "<button class='card' data-act='voice-start'><span class='cat'>●</span><strong>" + L("Start dictation", "बोलना शुरू करें") + "</strong><small>" + L("Speak in Hindi or English", "हिन्दी या अंग्रेज़ी में बोलें") + "</small></button>" +
+      "<button class='card' data-act='voice-stop'><span class='cat'>■</span><strong>" + L("Stop", "रोकें") + "</strong><small>" + L("Finish and review", "समाप्त करें") + "</small></button>" +
+      "</div>" +
+      "<div class='section-title'>" + L("Transcript", "प्रतिलेख") + "</div>" +
+      "<div class='area' id='voiceBox' style='min-height:160px;white-space:pre-wrap;padding:10px;border:1px solid var(--line);border-radius:9px;font-family:var(--ui-dev)'>" +
+      (S.voiceText ? esc(S.voiceText) : "<span class='hint'>" + L("Your dictation will appear here…", "आपका बोला हुआ पाठ यहाँ दिखेगा…") + "</span>") + "</div>" +
+      "<div class='row' style='margin-top:10px'>" +
+      "<button class='btn primary' data-act='voice-insert'>" + L("Insert into document", "दस्तावेज़ में जोड़ें") + "</button>" +
+      "<button class='btn' data-act='voice-clear'>" + L("Clear", "साफ़ करें") + "</button>" +
+      "</div>" +
+      "<p class='hint' style='margin-top:12px'>" + L("Dictation uses the speech engine installed on your tablet. Hindi recognition needs the Hindi voice pack in Android settings → System → Languages & input → Voice input. Works fully offline once installed.",
+        "टैबलेट के स्पीच इंजन का उपयोग होता है। हिन्दी हेतु Android सेटिंग्स → भाषा व इनपुट → वॉइस इनपुट में हिन्दी पैक जोड़ें। एक बार जोड़ने पर ऑफ़लाइन काम करता है।") + "</p>" +
+      (ND.native.has() ? "" : "<p class='hint warn'>" + L("In-browser preview may not provide speech recognition — install the APK on the tablet for full dictation.",
+        "ब्राउज़र पूर्वावलोकन में स्पीच उपलब्ध न हो सकता है — पूर्ण सुविधा हेतु APK टैबलेट पर इंस्टॉल करें।") + "</p>");
+  };
+
+  function paintVoice() {
+    var box = el("voiceBox");
+    if (!box) return;
+    box.innerHTML = S.voiceText ? esc(S.voiceText) : "<span class='hint'>" + L("Your dictation will appear here…", "आपका बोला हुआ पाठ यहाँ दिखेगा…") + "</span>";
+  }
+
+  function startVoice() {
+    if (S.voiceOn) return;
     if (ND.native.has()) {
       global.NDVoiceResult = function (text, isFinal) {
-        if (text) onText(text, isFinal);
-        if (isFinal === false) return;
+        if (text) {
+          S.voiceText += (S.voiceText && !/\s$/.test(S.voiceText) ? " " : "") + text;
+          paintVoice();
+        }
+        if (isFinal) { S.voiceOn = false; }
       };
-      global.NDVoiceEnd = function () { listening = false; onEnd && onEnd(); };
-      var ok = ND.native.call("startVoice", lang || "hi-IN");
-      listening = !!ok || true;
-      return true;
+      global.NDVoiceEnd = function () { S.voiceOn = false; };
+      ND.native.call("startVoice");
+      S.voiceOn = true;
+      status(L("Listening…", "सुन रहा है…"));
+      return;
     }
     var SR = global.SpeechRecognition || global.webkitSpeechRecognition;
-    if (!SR) return false;
-    try {
-      recognition = new SR();
-      recognition.lang = lang || "hi-IN";
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.onresult = function (e) {
-        var finalText = "", interim = "";
-        for (var i = e.resultIndex; i < e.results.length; i++) {
-          var r = e.results[i];
-          if (r.isFinal) finalText += r[0].transcript;
-          else interim += r[0].transcript;
-        }
-        if (finalText) onText(finalText, true);
-        if (interim) onText(interim, false);
-      };
-      recognition.onend = function () { listening = false; onEnd && onEnd(); };
-      recognition.onerror = function (e) {
-        listening = false;
-        U.toast("वॉइस त्रुटि: " + (e.error || ""), "err");
-        onEnd && onEnd();
-      };
-      recognition.start();
-      listening = true;
-      return true;
-    } catch (e) {
-      return false;
+    if (!SR) {
+      status(L("Speech recognition is not available in this browser. Install the APK on your tablet.",
+        "इस ब्राउज़र में स्पीच उपलब्ध नहीं है। टैबलेट पर APK इंस्टॉल करें।"), "warn", 5000);
+      return;
     }
+    var rec = new SR();
+    rec.lang = ND.lang() === "hi" ? "hi-IN" : "en-IN";
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.onresult = function (ev) {
+      for (var i = ev.resultIndex; i < ev.results.length; i++) {
+        if (ev.results[i].isFinal) {
+          S.voiceText += (S.voiceText && !/\s$/.test(S.voiceText) ? " " : "") + ev.results[i][0].transcript;
+          paintVoice();
+        }
+      }
+    };
+    rec.onerror = function (e) {
+      S.voiceOn = false;
+      status(L("Speech error: ", "स्पीच त्रुटि: ") + (e.error || ""), "warn");
+    };
+    rec.onend = function () { S.voiceOn = false; };
+    S.voiceRec = rec;
+    S.voiceOn = true;
+    try { rec.start(); status(L("Listening…", "सुन रहा है…")); } catch (e) { S.voiceOn = false; }
   }
 
   function stopVoice() {
-    if (recognition) { try { recognition.stop(); } catch (e) {} }
     if (ND.native.has()) ND.native.call("stopVoice");
-    listening = false;
+    if (S.voiceRec) { try { S.voiceRec.stop(); } catch (e) {} }
+    S.voiceOn = false;
+    status(L("Stopped", "रुका"));
   }
 
-  function screenVoice() {
-    openPanel("बोलकर लिखें (Speech to Text)", function (b) {
-      var langSel = U.el("select", { class: "input" }, [
-        U.el("option", { value: "hi-IN", text: "हिन्दी (भारत)" }),
-        U.el("option", { value: "en-IN", text: "English (India)" }),
-        U.el("option", { value: "en-US", text: "English (US)" })
-      ]);
-      var status = U.el("p", { class: "hint", text: "तैयार" });
-      var dot = U.el("span", { id: "voiceDot" });
-      var box = U.el("div", {
-        class: "area", contenteditable: "true",
-        style: { minHeight: "140px", background: "var(--surface)", padding: "10px", borderRadius: "10px", border: "1px solid var(--line)" },
-        "data-ph": "बोलना शुरू करें…"
-      });
-      var live = U.el("div", { class: "hint", style: { minHeight: "18px", color: "var(--accent)" } });
+  /* ---------------------------------------------------------------- convert */
+  PANELS.convert = function () {
+    var fonts = [
+      ["krutidev", "Kruti Dev 010 / 016"],
+      ["devlys", "DevLys 010"],
+      ["chanakya", "Chanakya"],
+      ["remington", "Remington / Agra"],
+      ["kundli", "Kundli"]
+    ];
+    return "<div class='tabs'>" +
+      "<button data-act='conv-mode' data-mode='k2u' class='" + (S.convMode === "k2u" ? "on" : "") + "'>" + L("Kruti Dev → Unicode", "कृतिदेव → यूनिकोड") + "</button>" +
+      "<button data-act='conv-mode' data-mode='u2k' class='" + (S.convMode === "u2k" ? "on" : "") + "'>" + L("Unicode → Kruti Dev", "यूनिकोड → कृतिदेव") + "</button>" +
+      "</div>" +
+      "<div class='field'><label>" + L("Source font", "स्रोत फ़ॉन्ट") + "</label><select class='select' id='convFont'>" +
+      fonts.map(function (f) { return "<option value='" + f[0] + "'" + (S.convFont === f[0] ? " selected" : "") + ">" + f[1] + "</option>"; }).join("") +
+      "</select></div>" +
+      "<div class='conv-grid'>" +
+      "<div><div class='lbl-sm'>" + L("Input", "इनपुट") + "</div><textarea class='area' id='convIn' placeholder='" + esc(L("Paste legacy text here…", "यहाँ पुराना पाठ चिपकाएँ…")) + "'></textarea></div>" +
+      "<div><div class='lbl-sm'>" + L("Output", "परिणाम") + "</div><textarea class='area' id='convOut' readonly></textarea></div>" +
+      "</div>" +
+      "<div class='row' style='margin-top:10px'>" +
+      "<button class='btn primary' data-act='conv-run'>" + L("Convert", "बदलें") + "</button>" +
+      "<button class='btn' data-act='conv-insert'>" + L("Insert into document", "दस्तावेज़ में जोड़ें") + "</button>" +
+      "<button class='btn' data-act='conv-copy'>" + ND.t("copy") + "</button>" +
+      "<button class='btn' data-act='conv-swap'>⇄ " + L("Swap", "बदलें") + "</button>" +
+      "</div>" +
+      "<p class='hint' style='margin-top:12px'>" + L("Converts legacy Kruti Dev, DevLys, Chanakya and Remington byte-sequences to standard Unicode Devanagari — what Word, WPS and every modern court system expect. Reverse conversion is available when a court still demands a legacy font.",
+        "कृतिदेव, देवलिस, चाणक्य व रेमिंग्टन को मानक यूनिकोड देवनागरी में बदलता है — जो Word, WPS व आधुनिक न्यायालय प्रणाली में चलता है। विपरीत रूपांतरण भी उपलब्ध है।") + "</p>";
+  };
 
-      var start = U.el("button", { class: "btn accent block", text: "🎙 बोलना शुरू करें" });
-      var insert = U.el("button", { class: "btn block", text: "दस्तावेज़ में जोड़ें" });
-
-      start.addEventListener("click", function () {
-        if (listening) { stopVoice(); start.textContent = "🎙 बोलना शुरू करें"; dot.classList.remove("live"); status.textContent = "रुका हुआ"; return; }
-        var ok = startVoice(langSel.value, function (text, isFinal) {
-          if (isFinal) {
-            box.textContent = (box.textContent + " " + text).trim();
-            live.textContent = "";
-          } else live.textContent = text;
-          status.textContent = "सुन रहा है…";
-          dot.classList.add("live");
-        }, function () {
-          start.textContent = "🎙 बोलना शुरू करें";
-          dot.classList.remove("live");
-          status.textContent = "रुका हुआ";
-        });
-        if (!ok) {
-          U.toast("इस डिवाइस में वॉइस पहचान उपलब्ध नहीं है। Google ऐप / स्पीच सेवा जाँचें।", "err", 4000);
-          return;
-        }
-        start.textContent = "⏹ रोकें";
-        dot.classList.add("live");
-        status.textContent = "सुन रहा है…";
-      });
-      insert.addEventListener("click", function () {
-        if (!box.textContent.trim()) { U.toast("कुछ बोलें पहले", "warn"); return; }
-        E.insertTextAtCursor(box.textContent.trim());
-        U.toast("दस्तावेज़ में जोड़ा गया", "ok");
-      });
-
-      b.appendChild(langSel);
-      b.appendChild(U.el("div", { class: "rowline", style: { margin: "8px 0" } }, [dot, status]));
-      b.appendChild(box);
-      b.appendChild(live);
-      b.appendChild(U.el("div", { class: "rowline", style: { marginTop: "10px" } }, [start]));
-      b.appendChild(insert);
-      b.appendChild(U.el("p", { class: "hint", style: { marginTop: "10px" },
-        text: "सुझाव: शांत कमरे में, स्पष्ट उच्चारण करें। हिन्दी में ‘धारा’, ‘न्यायालय’ जैसे शब्द बोलें।" }));
-    });
-  }
-
-  /* -------------------------------------------------------------- legal tools */
-  function screenLegal() {
-    openPanel("विधिक सहायक", function (b) {
-      var tabs = U.el("div", { class: "tabs" });
-      var body = U.el("div");
-      var views = ["BNS ↔ IPC", "BNSS ↔ CrPC", "सीमा अवधि", "ब्याज कैलकुलेटर", "तिथि गणना", "चालान बनाएँ"];
-      var cur = 0;
-      views.forEach(function (v, i) {
-        var t = U.el("button", { text: v, class: i === 0 ? "on" : "" });
-        t.addEventListener("click", function () {
-          cur = i;
-          tabs.querySelectorAll("button").forEach(function (x) { x.classList.remove("on"); });
-          t.classList.add("on");
-          render();
-        });
-        tabs.appendChild(t);
-      });
-
-      function table(rows, head) {
-        var wrap = U.el("div", { style: { overflowX: "auto" } });
-        var tbl = U.el("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: "12.5px" } });
-        var thead = U.el("tr");
-        head.forEach(function (h) { thead.appendChild(U.el("th", { text: h, style: { textAlign: "left", padding: "6px", borderBottom: "2px solid var(--line)", whiteSpace: "nowrap" } })); });
-        tbl.appendChild(thead);
-        rows.forEach(function (r) {
-          var tr = U.el("tr");
-          r.forEach(function (c, i) {
-            tr.appendChild(U.el("td", { text: c, style: { padding: "6px", borderBottom: "1px solid var(--line-soft)", verticalAlign: "top", fontWeight: i === 0 ? "600" : "400", whiteSpace: "nowrap" } }));
-          });
-          tbl.appendChild(tr);
-        });
-        wrap.appendChild(tbl);
-        return wrap;
-      }
-
-      function render() {
-        body.innerHTML = "";
-        if (cur === 0) {
-          body.appendChild(U.el("p", { class: "hint", text: "संकेतात्मक मिलान — आधिकारिक BNS पाठ से पुष्टि अवश्य करें।" }));
-          body.appendChild(table(ND.BNS_IPC, ["BNS", "IPC", "विषय"]));
-        } else if (cur === 1) {
-          body.appendChild(U.el("p", { class: "hint", text: "संकेतात्मक मिलान — आधिकारिक BNSS पाठ से पुष्टि अवश्य करें।" }));
-          body.appendChild(table(ND.BNSS_CRPC, ["BNSS", "CrPC", "विषय"]));
-        } else if (cur === 2) {
-          body.appendChild(U.el("p", { class: "hint", text: "सीमा अधिनियम, 1963 के सामान्य प्रावधान (संकेतात्मक)।" }));
-          var d = U.el("div", { class: "field" }, [U.el("label", { text: "वाद कारण की तिथि" })]);
-          var dateInp = U.el("input", { class: "input", type: "date" });
-          d.appendChild(dateInp);
-          body.appendChild(d);
-          var calc = U.el("button", { class: "btn sm", text: "देय तिथि निकालें" });
-          var res = U.el("div", { class: "hint", style: { marginTop: "8px" } });
-          calc.addEventListener("click", function () {
-            res.innerHTML = "";
-            if (!dateInp.value) { U.toast("तिथि चुनें", "warn"); return; }
-            ND.LIMITATION.forEach(function (l) {
-              if (!l[2]) return;
-              var dt = new Date(dateInp.value);
-              dt.setDate(dt.getDate() + l[2]);
-              var row = U.el("div", { style: { padding: "4px 0", borderBottom: "1px solid var(--line-soft)" } }, [
-                U.el("strong", { text: l[0] + " — " }),
-                U.el("span", { text: "अंतिम तिथि: " + dt.toLocaleDateString("hi-IN") })
-              ]);
-              res.appendChild(row);
-            });
-          });
-          body.appendChild(calc);
-          body.appendChild(res);
-          body.appendChild(U.el("h3", { text: "सामान्य अवधियाँ", style: { fontSize: "13px", margin: "14px 0 6px" } }));
-          body.appendChild(table(ND.LIMITATION.map(function (l) { return [l[0], l[1]]; }), ["प्रकरण", "अवधि"]));
-        } else if (cur === 3) {
-          var p = U.el("input", { class: "input", type: "number", placeholder: "मूलधन (रु.)" });
-          var r = U.el("input", { class: "input", type: "number", placeholder: "वार्षिक दर (%)" });
-          var y = U.el("input", { class: "input", type: "number", placeholder: "अवधि (वर्ष)" });
-          var out = U.el("div", { class: "hint", style: { marginTop: "10px" } });
-          var go = U.el("button", { class: "btn accent block", text: "गणना करें" });
-          go.addEventListener("click", function () {
-            var P = parseFloat(p.value) || 0, R = parseFloat(r.value) || 0, Y = parseFloat(y.value) || 0;
-            var simple = P * R * Y / 100;
-            var comp = P * (Math.pow(1 + R / 100, Y) - 1);
-            out.innerHTML = "";
-            out.appendChild(U.el("div", { text: "साधारण ब्याज: रु. " + simple.toFixed(2) + " · कुल: रु. " + (P + simple).toFixed(2) }));
-            out.appendChild(U.el("div", { text: "चक्रवृद्धि ब्याज: रु. " + comp.toFixed(2) + " · कुल: रु. " + (P + comp).toFixed(2) }));
-            var add = U.el("button", { class: "btn sm", text: "दस्तावेज़ में जोड़ें", style: { marginTop: "8px" } });
-            add.addEventListener("click", function () {
-              E.insertTextAtCursor("मूलधन रु. " + P + " पर " + R + "% वार्षिक दर से " + Y + " वर्ष का साधारण ब्याज रु. " + simple.toFixed(2) + " है।");
-            });
-            out.appendChild(add);
-          });
-          body.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "मूलधन (रु.)" }), p]));
-          body.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "वार्षिक ब्याज दर (%)" }), r]));
-          body.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "अवधि (वर्ष)" }), y]));
-          body.appendChild(go);
-          body.appendChild(out);
-          body.appendChild(U.el("p", { class: "hint", text: "धारा 34 CPC के अंतर्गत ब्याज की गणना में न्यायालय की विवेकाधीन शक्ति होती है।" }));
-        } else if (cur === 4) {
-          var from = U.el("input", { class: "input", type: "date" });
-          var days = U.el("input", { class: "input", type: "number", placeholder: "दिन जोड़ें/घटाएँ" });
-          var out2 = U.el("div", { class: "hint", style: { marginTop: "10px" } });
-          var go2 = U.el("button", { class: "btn accent block", text: "गणना करें" });
-          go2.addEventListener("click", function () {
-            if (!from.value) return;
-            var d1 = new Date(from.value);
-            var d2 = new Date(d1);
-            d2.setDate(d2.getDate() + (parseInt(days.value, 10) || 0));
-            out2.textContent = "परिणाम तिथि: " + d2.toLocaleDateString("hi-IN") + " (" + d2.toLocaleDateString("en-IN", { weekday: "long" }) + ")";
-          });
-          body.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "आरंभ तिथि" }), from]));
-          body.appendChild(U.el("div", { class: "field" }, [U.el("label", { text: "दिन (ऋणात्मक भी)" }), days]));
-          body.appendChild(go2);
-          body.appendChild(out2);
-        } else {
-          var forms = [
-            ["समन आदेश", "order-summon"], ["वारंट", "order-summon"], ["जमानत आवेदन", "bail"],
-            ["नकल आवेदन", "copy-app"], ["स्थगन पत्र", "adjourn"]
-          ];
-          forms.forEach(function (f) {
-            var btn = U.el("button", { class: "btn block", text: f[0], style: { justifyContent: "flex-start", marginBottom: "6px" } });
-            btn.addEventListener("click", function () {
-              var tp = ND.templates.filter(function (x) { return x.id === f[1]; })[0];
-              insertTemplate(tp);
-            });
-            body.appendChild(btn);
-          });
-          body.appendChild(U.el("p", { class: "hint", text: "अधिक प्रारूप ‘न्यायालयीन प्रारूप’ में उपलब्ध हैं।" }));
-        }
-      }
-      b.appendChild(tabs);
-      b.appendChild(body);
-      render();
-    });
-  }
-
-  /* ------------------------------------------------------------------- help */
-  function screenHelp() {
-    modal("सहायता एवं शॉर्टकट", function (b) {
-      var rows = [
-        ["Ctrl + B / I / U", "मोटा · तिरछा · रेखांकित"],
-        ["Ctrl + S", "दस्तावेज़ सहेजें"],
-        ["Ctrl + F", "खोजें"],
-        ["Ctrl + P", "प्रिंट / PDF"],
-        ["Ctrl + Z / Y", "पूर्ववत / पुनः"],
-        ["Ctrl + D", "चुने शब्द का अर्थ"],
-        ["Enter", "नया अनुच्छेद"],
-        ["Tab", "इंडेंट (चार स्पेस)"],
-        ["Backspace (खाली पंक्ति)", "अनुच्छेद मिलाएँ"]
-      ];
-      var l = U.el("div", { class: "list" });
-      rows.forEach(function (r) {
-        l.appendChild(U.el("div", { class: "item" }, [
-          U.el("div", { class: "grow" }, [U.el("strong", { text: r[1] }), U.el("small", { text: r[0] })]),
-          U.el("kbd", { text: r[0].split(" / ")[0] })
-        ]));
-      });
-      b.appendChild(l);
-      b.appendChild(U.el("h4", { text: "काम करने का तरीका", style: { margin: "14px 0 6px", fontSize: "13px" } }));
-      b.appendChild(U.el("p", { class: "hint", text: "1) ‘न्यायालय सेटिंग’ में न्यायालय, न्यायाधीश, प्रकरण संख्या भरें। 2) ‘न्यायालयीन प्रारूप’ से आवश्यक प्रारूप चुनें। 3) पाठ बोलकर या टाइप करके पूरा करें। 4) ‘वर्तनी जाँचक’ चलाएँ। 5) .docx या PDF में निर्यात करें।" }));
-      b.appendChild(U.el("p", { class: "hint", text: "फ़ाइलें डिवाइस के Documents/NyayaLekh फ़ोल्डर में सहेजी जाती हैं — WPS Office वहाँ से सीधे खोल सकता है।" }));
-    }, [{ label: "समझ गया", cls: "accent" }]);
-  }
-
-  function screenAbout() {
-    modal("परिचय एवं लाइसेंस", function (b) {
-      b.appendChild(U.el("h3", { text: "न्यायलेख — NyayaLekh v1.0", style: { margin: "0 0 4px" } }));
-      b.appendChild(U.el("p", { class: "hint", text: "राजस्थान के न्यायालयों में हिन्दी में विधिक प्रारूपण हेतु बनाया गया ऑफ़लाइन ऐप। सभी सुविधाएँ निःशुल्क एवं पूर्णतः ऑफ़लाइन हैं; कोई भी पाठ डिवाइस से बाहर नहीं जाता।" }));
-      var stats = ND.dict.stats();
-      b.appendChild(U.el("p", { class: "hint", text: "शब्दकोश: " + stats.hindi.toLocaleString("hi-IN") + " हिन्दी शब्द · " + stats.legal + " विधिक शब्द · " + stats.english.toLocaleString("hi-IN") + " अंग्रेज़ी शब्द" }));
-      b.appendChild(U.el("h4", { text: "ओपन सोर्स एवं आभार", style: { margin: "12px 0 4px", fontSize: "13px" } }));
-      b.appendChild(U.el("p", { class: "hint", text: "• Noto Serif / Noto Sans Devanagari, Tiro Devanagari Hindi — SIL Open Font License 1.1 (Google Fonts) · • CFILT Hindi WordNet, IIT Bombay — शब्दकोश डेटा · • JSZip (MIT) · • Kruti Dev mapping table — @bharattype/hindi-transliteration (MIT) · • English lexicon — an-array-of-english-words (MIT)" }));
-      b.appendChild(U.el("p", { class: "hint", text: "यह ऐप किसी भी प्रकार की विधिक सलाह नहीं देता; प्रारूप केवल मसौदा तैयार करने में सहायक हैं — अंतिम पुष्टि संबंधित अधिनियम एवं न्यायालयीन नियमों से करें।" }));
-    }, [{ label: "बंद करें", cls: "accent" }]);
-  }
-
-  /* ==========================================================================
-   * drawer, find, zoom
-   * ======================================================================== */
-  function openDrawer() {
-    document.getElementById("drawer").hidden = false;
-    document.getElementById("scrim").hidden = false;
-  }
-  function closeDrawer() {
-    document.getElementById("drawer").hidden = true;
-    document.getElementById("scrim").hidden = true;
-  }
-
-  var findState = { hits: [], idx: -1 };
-  function openFind() {
-    var f = document.getElementById("findbar");
-    f.hidden = false;
-    document.getElementById("findInput").focus();
-  }
-  function closeFind() {
-    document.getElementById("findbar").hidden = true;
-    findState = { hits: [], idx: -1 };
-  }
-
-  function fitZoom() {
-    var canvas = document.getElementById("canvasWrap");
-    var size = D.PAGE_SIZES[current.page.size] || D.PAGE_SIZES.A4;
-    var pageW = size.w * 3.7795275591;   // mm → px
-    var avail = canvas.clientWidth - 24;
-    var z = Math.min(1.35, Math.max(0.25, avail / pageW));
-    if (window.innerWidth > pageW + 100) z = Math.min(z, 1);
-    setZoom(z);
-  }
-
-  function setZoom(z) {
-    z = Math.max(0.25, Math.min(2.2, z));
-    document.documentElement.style.setProperty("--zoom", z.toFixed(2));
-    S.zoom = z;
-    var el = document.getElementById("stZoom");
-    if (el) el.textContent = Math.round(z * 100) + "%";
-  }
-
-  /* ==========================================================================
-   * screen router
-   * ======================================================================== */
-  function openScreen(name, arg) {
-    switch (name) {
-      case "new":
-        confirmBox("नया दस्तावेज़", "वर्तमान दस्तावेज़ सहेजा जा चुका है। नया खाली दस्तावेज़ खोलें?", function () {
-          newDoc();
-        }, "नया खोलें");
-        break;
-      case "templates": screenTemplates(); break;
-      case "files": screenFiles(); break;
-      case "import": screenImport(); break;
-      case "export": screenExport(current); break;
-      case "courts": screenCourts(); break;
-      case "page": screenPage(); break;
-      case "display": screenDisplay(); break;
-      case "dict": screenDict(arg); break;
-      case "spell": screenSpell(); break;
-      case "convert": screenConvert(arg); break;
-      case "translit": screenTranslit(); break;
-      case "typo": screenTypo(); break;
-      case "voice": screenVoice(); break;
-      case "legal": screenLegal(); break;
-      case "help": screenHelp(); break;
-      case "about": screenAbout(); break;
-      default: break;
+  function runConvert() {
+    var input = el("convIn"), output = el("convOut");
+    if (!input || !output) return;
+    var text = input.value;
+    if (!text.trim()) { status(L("Paste some text first.", "पहले पाठ चिपकाएँ।"), "warn"); return; }
+    if (S.convMode === "u2k") {
+      output.value = T.unicodeToKruti(text);
+    } else if (S.convFont === "chanakya") {
+      output.value = T.chanakyaToUnicode(text);
+    } else if (S.convFont === "devlys") {
+      output.value = T.devlysToUnicode(text);
+    } else if (S.convFont === "remington") {
+      output.value = T.remingtonToUnicode(text);
+    } else if (S.convFont === "kundli") {
+      output.value = T.kundliToUnicode(text);
+    } else {
+      output.value = T.fixMatras(T.krutiToUnicode(text));
     }
   }
-  A.openScreen = openScreen;
+
+  /* ------------------------------------------------------------------ legal */
+  PANELS.legal = function () {
+    var tabs = [
+      ["glossary", L("Glossary", "शब्दावली")],
+      ["bns", "BNS ↔ IPC"],
+      ["bnss", "BNSS ↔ CrPC"],
+      ["limitation", L("Limitation", "परिसीमा")],
+      ["rules", L("Court rules", "न्यायालय नियम")]
+    ];
+    var body = "";
+    var q = S.legalQuery.toLowerCase();
+    if (S.legalTab === "glossary") {
+      var rows = (ND.LEGAL || []).filter(function (e) {
+        return !q || (e.h + " " + e.e + " " + e.g).toLowerCase().indexOf(q) >= 0;
+      }).slice(0, 300);
+      body = rows.map(function (e) {
+        return "<div class='dict-entry'><div class='head'><span class='hw' style='font-family:var(--ui-dev)'>" + esc(e.h) + "</span>" +
+          "<span class='en'>" + esc(e.e) + "</span></div><div class='gloss'>" + esc(e.g) + "</div>" +
+          "<div class='row' style='margin-top:5px'><button class='sug' data-act='dict-insert' data-word='" + esc(e.h) + "'>" + L("Insert", "जोड़ें") + "</button></div></div>";
+      }).join("") || "<div class='empty'>" + L("No entry found.", "कोई प्रविष्टि नहीं मिली।") + "</div>";
+    } else if (S.legalTab === "bns" || S.legalTab === "bnss") {
+      var table = S.legalTab === "bns" ? ND.BNS_IPC : ND.BNSS_CRPC;
+      body = "<table style='width:100%;border-collapse:collapse;font-size:12.5px'>" +
+        "<tr><th style='text-align:left;padding:6px;border-bottom:1px solid var(--line)'>" + (S.legalTab === "bns" ? "BNS" : "BNSS") + "</th>" +
+        "<th style='text-align:left;padding:6px;border-bottom:1px solid var(--line)'>" + (S.legalTab === "bns" ? "IPC" : "CrPC") + "</th>" +
+        "<th style='text-align:left;padding:6px;border-bottom:1px solid var(--line)'>" + L("Subject", "विषय") + "</th></tr>" +
+        (table || []).filter(function (r) {
+          return !q || String(r.join(" ")).toLowerCase().indexOf(q) >= 0;
+        }).map(function (r) {
+          return "<tr><td style='padding:6px;border-bottom:1px solid var(--line)'><b>" + esc(r[0]) + "</b></td>" +
+            "<td style='padding:6px;border-bottom:1px solid var(--line)'>" + esc(r[1]) + "</td>" +
+            "<td style='padding:6px;border-bottom:1px solid var(--line)'>" + esc(r[2] || "") + "</td></tr>";
+        }).join("") + "</table>";
+    } else if (S.legalTab === "limitation") {
+      body = "<table style='width:100%;border-collapse:collapse;font-size:12.5px'>" +
+        (ND.LIMITATION || []).filter(function (r) { return !q || String(r.join(" ")).toLowerCase().indexOf(q) >= 0; })
+          .map(function (r) {
+            return "<tr><td style='padding:6px;border-bottom:1px solid var(--line)'>" + esc(r[0]) + "</td>" +
+              "<td style='padding:6px;border-bottom:1px solid var(--line)'>" + esc(r[1]) + "</td></tr>";
+          }).join("") + "</table>";
+    } else {
+      body = "<div class='list'>" + (ND.RULES || []).filter(function (r) {
+        return !q || String(r.join(" ")).toLowerCase().indexOf(q) >= 0;
+      }).map(function (r) {
+        return "<div class='list-item'><span class='grow'><strong>" + esc(r[0]) + "</strong><small>" + esc(r[1]) + "</small></span></div>";
+      }).join("") + "</div>";
+    }
+    return "<div class='tabs'>" + tabs.map(function (t) {
+      return "<button data-act='legal-tab' data-tab='" + t[0] + "' class='" + (S.legalTab === t[0] ? "on" : "") + "'>" + esc(t[1]) + "</button>";
+    }).join("") + "</div>" +
+      "<input class='input' id='legalSearch' placeholder='" + esc(L("Search reference…", "संदर्भ खोजें…")) + "' value='" + esc(S.legalQuery) + "' style='margin-bottom:10px'>" +
+      "<div style='max-height:none'>" + body + "</div>" +
+      "<p class='hint warn' style='margin-top:14px'>" + L("Cross-reference tables are indicative study aids. Always verify against the official Gazette / Rajasthan High Court Rules before filing.",
+        "तालिकाएँ केवल सहायक हैं। दाखिल करने से पूर्व राजपत्र / राजस्थान उच्च न्यायालय नियमों से पुष्टि करें।") + "</p>";
+  };
+
+  /* --------------------------------------------------------------- settings */
+  PANELS.settings = function () {
+    var accents = { indigo: "#4f46e5", saffron: "#c2410c", teal: "#0f766e", plum: "#7e22ce", slate: "#334155" };
+    return "<div class='section-title'>" + L("Language", "भाषा") + "</div>" +
+      "<div class='set-row'><div class='lbl'><strong>" + L("Interface language", "इंटरफ़ेस भाषा") + "</strong><small>" +
+      L("English is the default. Document text is unaffected.", "डिफ़ॉल्ट अंग्रेज़ी। दस्तावेज़ के पाठ पर कोई असर नहीं।") + "</small></div>" +
+      seg("langset", [{ v: "en", label: "English" }, { v: "hi", label: "हिन्दी" }], ND.lang()) + "</div>" +
+      "<div class='section-title'>" + L("Appearance", "रूप") + "</div>" +
+      "<div class='set-row'><div class='lbl'><strong>" + L("Theme", "थीम") + "</strong></div>" +
+      seg("theme", [{ v: "light", label: L("Light", "हल्का") }, { v: "sepia", label: L("Sepia", "सेपिया") }, { v: "dark", label: L("Dark", "गहरा") }, { v: "auto", label: L("Auto", "स्वतः") }], ND.prefs.theme) + "</div>" +
+      "<div class='set-row'><div class='lbl'><strong>" + L("Accent", "रंग") + "</strong></div>" +
+      "<div class='swatches'>" + Object.keys(accents).map(function (k) {
+        return "<button class='swatch" + (ND.prefs.accent === k ? " on" : "") + "' data-act='accent' data-accent='" + k + "' style='background:" + accents[k] + "' aria-label='" + k + "'></button>";
+      }).join("") + "</div></div>" +
+      toggleRow("autosave", L("Autosave", "स्वतः सहेजें"), L("Save every change automatically", "प्रत्येक परिवर्तन स्वतः सहेजें"), ND.prefs.autosave !== false) +
+      toggleRow("autoSpell", L("Live spelling", "लाइव वर्तनी"), L("Underline doubtful words as you type", "संदिग्ध शब्दों पर रेखा"), ND.prefs.autoSpell !== false) +
+      toggleRow("statusBar", L("Status bar", "स्टेटस बार"), "", ND.prefs.statusBar !== false) +
+      toggleRow("typewriter", L("Typewriter scrolling", "टाइपराइटर स्क्रॉल"), L("Keeps the caret in the middle", "कर्सर मध्य में रहे"), !!ND.prefs.typewriter) +
+      "<div class='section-title'>" + L("Writing", "लेखन") + "</div>" +
+      "<button class='list-item' data-act='open-court'><span class='grow'><strong>" + L("Court details", "न्यायालय विवरण") + "</strong>" +
+      "<small>" + esc(D.courtName(S.doc)) + "</small></span><span>›</span></button>" +
+      "<div style='height:6px'></div>" +
+      "<button class='list-item' data-act='open-fonts'><span class='grow'><strong>" + L("Font library", "फ़ॉन्ट संग्रह") + "</strong>" +
+      "<small>" + esc(ND.fonts.label(S.doc.style.devFont)) + " · " + esc(ND.fonts.label(S.doc.style.latinFont)) + "</small></span><span>›</span></button>" +
+      "<div class='section-title'>" + L("Defaults for new documents", "नए दस्तावेज़ हेतु डिफ़ॉल्ट") + "</div>" +
+      "<div class='grid-2'><div class='field'><label>" + L("Devanagari font", "देवनागरी फ़ॉन्ट") + "</label>" +
+      "<select class='select' data-pref='devFont'>" + ND.fonts.dev().map(function (f) {
+        return "<option value='" + f.id + "'" + (ND.prefs.devFont === f.id ? " selected" : "") + ">" + esc(f.label) + "</option>";
+      }).join("") + "</select></div>" +
+      "<div class='field'><label>" + L("Latin font", "लैटिन फ़ॉन्ट") + "</label>" +
+      "<select class='select' data-pref='latinFont'>" + ND.fonts.latin().map(function (f) {
+        return "<option value='" + f.id + "'" + (ND.prefs.latinFont === f.id ? " selected" : "") + ">" + esc(f.label) + "</option>";
+      }).join("") + "</select></div></div>" +
+      "<div class='grid-2'><div class='field'><label>" + L("Default size", "डिफ़ॉल्ट आकार") + "</label>" +
+      "<input class='input' type='number' min='8' max='24' data-prefnum='size' value='" + (ND.prefs.size || 12) + "'></div>" +
+      "<div class='field'><label>" + L("Default line height", "पंक्ति ऊँचाई") + "</label>" +
+      "<input class='input' type='number' min='1' max='3' step='0.05' data-prefnum='lh' value='" + (ND.prefs.lh || 1.65) + "'></div></div>" +
+      "<div class='section-title'>" + L("Data", "डेटा") + "</div>" +
+      "<div class='list'>" +
+      actionRow(L("Statistics", "आँकड़े"), "", "open-stats") +
+      actionRow(L("Help & shortcuts", "सहायता व शॉर्टकट"), "", "open-help") +
+      actionRow(L("About NyayaLekh", "न्यायालेख के बारे में"), "", "open-about") +
+      "</div>" +
+      "<div style='height:10px'></div>" +
+      "<button class='btn danger block' data-act='reset-prefs'>" + L("Reset all settings", "सभी सेटिंग्स रीसेट करें") + "</button>" +
+      "<p class='hint' style='margin-top:10px'>" + L("Documents live only on this device. Nothing is uploaded — the app works fully offline.",
+        "दस्तावेज़ केवल इसी डिवाइस पर रहते हैं। कुछ भी अपलोड नहीं होता — ऐप पूर्णतः ऑफ़लाइन है।") + "</p>";
+  };
+
+  /* --------------------------------------------------------------- export */
+  PANELS.export = function () {
+    var fmts = [
+      ["docx", "DOCX", L("Opens in WPS Office, Word, Google Docs", "WPS Office, Word में खुलता है")],
+      ["pdf", "PDF", L("Print-ready via the system print dialog", "सिस्टम प्रिंट से PDF")],
+      ["html", "HTML", L("Web page with fonts and layout", "फ़ॉन्ट व लेआउट सहित वेब पेज")],
+      ["rtf", "RTF", L("Widely compatible rich text", "विस्तृत संगतता वाला रिच टेक्स्ट")],
+      ["txt", "TXT", L("Plain Unicode text", "सादा यूनिकोड पाठ")],
+      ["md", "Markdown", L("Structured plain text", "संरचित पाठ")]
+    ];
+    return "<div class='cards'>" + fmts.map(function (f) {
+      return "<button class='card' data-act='export' data-fmt='" + f[0] + "'><span class='cat'>" + f[1] + "</span>" +
+        "<strong>" + L("Export ", "निर्यात ") + f[1] + "</strong><small>" + esc(f[2]) + "</small></button>";
+    }).join("") + "</div>" +
+      "<div class='section-title'>" + L("Other", "अन्य") + "</div>" +
+      "<div class='list'>" +
+      actionRow(L("Copy full text", "पूरा पाठ कॉपी करें"), "", "copy-doc") +
+      actionRow(L("Share as text", "पाठ के रूप में साझा"), "", "share-doc") +
+      actionRow(L("Print", "प्रिंट"), "", "print-doc") +
+      "</div>" +
+      "<p class='hint' style='margin-top:12px'>" + L("Files are written to Documents/NyayaLekh, where WPS Office can open them. PDF export uses Android's print-to-PDF.",
+        "फ़ाइलें Documents/NyayaLekh में सहेजी जाती हैं, जहाँ से WPS Office खोल सकता है। PDF हेतु Android प्रिंट सेव करें।") + "</p>";
+  };
+
+  /* --------------------------------------------------------------- import */
+  PANELS.import = function () {
+    return "<div class='cards'>" +
+      "<button class='card' data-act='import-file'><span class='cat'>DOCX</span><strong>" + L("Word document", "वर्ड दस्तावेज़") + "</strong><small>WPS Office / Word</small></button>" +
+      "<button class='card' data-act='import-file'><span class='cat'>ODT</span><strong>OpenDocument</strong><small>LibreOffice / WPS</small></button>" +
+      "<button class='card' data-act='import-file'><span class='cat'>RTF</span><strong>Rich Text</strong><small>Legacy but common</small></button>" +
+      "<button class='card' data-act='import-file'><span class='cat'>PDF</span><strong>PDF text</strong><small>" + L("Text layer only", "केवल पाठ परत") + "</small></button>" +
+      "<button class='card' data-act='import-file'><span class='cat'>TXT</span><strong>" + L("Plain text", "सादा पाठ") + "</strong><small>UTF-8</small></button>" +
+      "<button class='card' data-act='import-file'><span class='cat'>HTML</span><strong>HTML</strong><small>.html</small></button>" +
+      "</div>" +
+      "<div class='section-title'>" + L("Legacy Hindi fonts", "पुराने हिन्दी फ़ॉन्ट") + "</div>" +
+      "<p class='hint'>" + L("Text typed in Kruti Dev or DevLys is detected automatically and converted to Unicode on paste or import.",
+        "कृतिदेव या देवलिस में लिखा पाठ चिपकाने/आयात करने पर स्वतः यूनिकोड में बदलता है।") + "</p>" +
+      "<button class='btn block' data-act='open-convert'>" + L("Open converter", "परिवर्तक खोलें") + "</button>" +
+      "<p class='hint warn' style='margin-top:12px'>" + L("Old binary .doc files are not supported — open them in WPS Office and save as .docx first.",
+        "पुरानी .doc फ़ाइलें समर्थित नहीं — WPS Office में खोलकर .docx में सहेजें।") + "</p>";
+  };
+
+  /* ---------------------------------------------------------------- court */
+  PANELS.court = function () {
+    var c = S.doc.court || {};
+    return "<div class='field'><label>" + L("Court type", "न्यायालय प्रकार") + "</label><select class='select' data-court='type'>" +
+      D.COURTS.map(function (x) {
+        return "<option value='" + x.id + "'" + (c.type === x.id ? " selected" : "") + ">" +
+          esc(ND.lang() === "hi" ? x.hi : x.en) + " — " + esc(x.hi) + "</option>";
+      }).join("") + "</select></div>" +
+      "<div class='field'><label>" + L("Place / district", "स्थान / जिला") + "</label><input class='input' data-court='place' value='" + esc(c.place || "") + "' placeholder='जयपुर'></div>" +
+      "<div class='field'><label>" + L("Full court name (optional)", "पूरा न्यायालय नाम (वैकल्पिक)") + "</label><input class='input' data-court='name' value='" + esc(c.name || "") + "' placeholder='" + esc(D.COURTS.filter(function (x) { return x.id === c.type; }).map(function (x) { return x.prefix; })[0] || "") + "'></div>" +
+      "<div class='grid-2'>" +
+      "<div class='field'><label>" + L("Judge", "न्यायाधीश") + "</label><input class='input' data-court='judge' value='" + esc(c.judge || "") + "'></div>" +
+      "<div class='field'><label>" + L("Case number", "प्रकरण क्रमांक") + "</label><input class='input' data-court='caseNo' value='" + esc(c.caseNo || "") + "'></div>" +
+      "<div class='field'><label>" + L("Prosecutor", "अभियोजक") + "</label><input class='input' data-court='prosecutor' value='" + esc(c.prosecutor || "") + "'></div>" +
+      "<div class='field'><label>" + L("Police station", "थाना") + "</label><input class='input' data-court='ps' value='" + esc(c.ps || "") + "'></div>" +
+      "</div>" +
+      "<div class='field'><label>" + L("Party line", "पक्षकार पंक्ति") + "</label><input class='input' data-court='party' value='" + esc(c.party || "") + "' placeholder='राज्य राजस्थान बनाम …'></div>" +
+      "<div class='field'><label>" + L("Sections", "धाराएँ") + "</label><input class='input' data-court='sections' value='" + esc(c.sections || "") + "' placeholder='धारा 302 IPC / 103 BNS'></div>" +
+      "<div class='field'><label>" + L("Clerk / reader", "नाज़िर / पेशकार") + "</label><input class='input' data-court='clerk' value='" + esc(c.clerk || "") + "'></div>" +
+      "<div class='section-title'>" + L("Preview", "पूर्वावलोकन") + "</div>" +
+      "<div style='border:1px solid var(--line);border-radius:9px;padding:10px;font-family:var(--ui-dev);font-size:13.5px'>" +
+      esc(D.courtName(S.doc)) + "</div>" +
+      "<div class='row' style='margin-top:12px'>" +
+      "<button class='btn primary' data-act='court-insert'>" + L("Insert court heading", "न्यायालय शीर्षक जोड़ें") + "</button>" +
+      "<button class='btn' data-act='court-fill'>" + L("Fill placeholders", "स्थान-चिह्न भरें") + "</button>" +
+      "</div>" +
+      "<p class='hint' style='margin-top:10px'>" + L("Placeholders such as {{caseNo}} in the document are replaced with these values; existing text is never overwritten.",
+        "दस्तावेज़ के {{caseNo}} जैसे स्थान-चिह्न इन मानों से भरते हैं; मौजूदा पाठ नहीं बदलता।") + "</p>";
+  };
+
+  function fillPlaceholders() {
+    E.pushUndo();
+    var n = 0;
+    S.doc.blocks.forEach(function (b) {
+      if (!b.html || b.html.indexOf("{{") < 0) return;
+      var next = D.applyVars(U.stripTags(b.html), S.doc);
+      b.html = U.escapeHtml(next);
+      n++;
+    });
+    E.rerender();
+    E.emitChange(true);
+    saveDoc();
+    status(n ? L("Placeholders filled", "स्थान-चिह्न भर गए") : L("No placeholders found", "कोई स्थान-चिह्न नहीं"), n ? "ok" : "warn");
+  }
+
+  /* ---------------------------------------------------------------- fonts */
+  PANELS.fonts = function () {
+    var q = (S.fontQuery || "").toLowerCase();
+    var devs = ND.fonts.dev().filter(function (f) { return !q || (f.label + " " + f.id).toLowerCase().indexOf(q) >= 0; });
+    var lats = ND.fonts.latin().filter(function (f) { return !q || (f.label + " " + f.id).toLowerCase().indexOf(q) >= 0; });
+    var item = function (f, script) {
+      var current = script === "dev" ? S.doc.style.devFont : S.doc.style.latinFont;
+      var preview = script === "dev" ? "न्यायालय श्रीमान — क, ख, ग, धारा 302" : "The Court of Sessions — Aa Bb 123";
+      return "<button class='font-item" + (current === f.id ? " on" : "") + "' data-act='set-font' data-font='" + f.id + "' data-script='" + script + "'>" +
+        "<span><span class='fname' style=\"font-family:'" + esc(f.label) + "'\">" + esc(f.label) + "</span>" +
+        "<span class='fmeta'> · " + esc(f.category || f.script) + "</span></span>" +
+        "<span class='fprev' style=\"font-family:'" + esc(f.label) + "'\">" + preview + "</span></button>";
+    };
+    return "<input class='input' id='fontSearch' placeholder='" + esc(L("Search {n} fonts…", "{n} फ़ॉन्ट खोजें…").replace("{n}", ND.fonts.list.length)) + "' value='" + esc(S.fontQuery || "") + "' style='margin-bottom:12px'>" +
+      "<div class='section-title'>" + L("Devanagari", "देवनागरी") + " · " + devs.length + "</div>" +
+      "<div class='font-list'>" + devs.map(function (f) { return item(f, "dev"); }).join("") + "</div>" +
+      "<div class='section-title'>" + L("Latin", "लैटिन") + " · " + lats.length + "</div>" +
+      "<div class='font-list'>" + lats.map(function (f) { return item(f, "latin"); }).join("") + "</div>" +
+      "<p class='hint' style='margin-top:12px'>" + L("All fonts are bundled with the app and work offline. Hindi paragraphs use the Devanagari face first, then the Latin face for English words.",
+        "सभी फ़ॉन्ट ऐप में सम्मिलित हैं और ऑफ़लाइन काम करते हैं। हिन्दी अनुच्छेद पहले देवनागरी फ़ॉन्ट, अंग्रेज़ी शब्दों हेतु लैटिन फ़ॉन्ट लेते हैं।") + "</p>";
+  };
+  AFTER.fonts = function () {
+    var i = el("fontSearch");
+    if (i) i.focus();
+  };
+
+  /* ----------------------------------------------------------------- stats */
+  PANELS.stats = function () {
+    var st = D.stats(S.doc);
+    var text = D.plainText(S.doc);
+    var sentences = (text.match(/[^.!?।॥]+[.!?।॥]+/g) || []).length || (text.trim() ? 1 : 0);
+    var rows = [
+      [L("Words", "शब्द"), st.words],
+      [L("Characters", "अक्षर"), st.chars],
+      [L("Characters (no spaces)", "अक्षर (बिना स्पेस)"), text.replace(/\s/g, "").length],
+      [L("Paragraphs", "अनुच्छेद"), st.paragraphs],
+      [L("Sentences", "वाक्य"), sentences],
+      [L("Pages", "पृष्ठ"), E.state.pageCount],
+      [L("Reading time", "पढ़ने का समय"), Math.max(1, Math.round(st.words / 200)) + " " + L("min", "मिनट")],
+      [L("Devanagari font", "देवनागरी फ़ॉन्ट"), ND.fonts.label(S.doc.style.devFont)],
+      [L("Latin font", "लैटिन फ़ॉन्ट"), ND.fonts.label(S.doc.style.latinFont)],
+      [L("Created", "बनाया"), U.fmtDate(S.doc.createdAt)],
+      [L("Updated", "अद्यतन"), U.fmtDate(S.doc.updatedAt)]
+    ];
+    return "<div class='list'>" + rows.map(function (r) {
+      return "<div class='set-row' style='padding:9px 0'><span class='hint'>" + esc(r[0]) + "</span><strong style='font-size:13px'>" + esc(r[1]) + "</strong></div>";
+    }).join("") + "</div>";
+  };
+
+  /* ------------------------------------------------------------------ help */
+  PANELS.help = function () {
+    var sections = [
+      [L("Getting started", "शुरुआत"), [
+        L("Tap Templates in the left rail to start from a Rajasthan court format.", "बाएँ रेल में प्रारूप दबाकर राजस्थान न्यायालय फ़ॉर्मैट से शुरू करें।"),
+        L("Fill Court details once and every {{placeholder}} in the document resolves.", "न्यायालय विवरण एक बार भरें — दस्तावेज़ के सभी {{स्थान-चिह्न}} भर जाएँगे।"),
+        L("Documents autosave on this device; find them under Files.", "दस्तावेज़ स्वतः इसी डिवाइस पर सहेजे जाते हैं; Files में मिलेंगे।")
+      ]],
+      [L("Typing in Hindi", "हिन्दी में लिखना"), [
+        L("Use any Android Hindi keyboard (Gboard → हिन्दी). Devanagari renders with the bundled font.", "Android का कोई भी हिन्दी कीबोर्ड (Gboard → हिन्दी) चुनें। देवनागरी सम्मिलित फ़ॉन्ट से स्पष्ट दिखती है।"),
+        L("Paste text from an old Kruti Dev document — it converts to Unicode automatically.", "पुराने कृतिदेव दस्तावेज़ से चिपकाएँ — स्वतः यूनिकोड बनेगा।"),
+        L("Tools → Fix Devanagari matras repairs गि/कि and nukta slips.", "उपकरण → मात्राएँ सुधारें से गि/कि व नुक़्ता ठीक होते हैं।")
+      ]],
+      [L("Opening WPS Office files", "WPS Office फ़ाइलें"), [
+        L("Menu → Open / import accepts .docx, .odt, .rtf, .txt, .html and text-based PDF.", "मेन्यू → खोलें/आयात में .docx, .odt, .rtf, .txt, .html व पाठ-युक्त PDF चलते हैं।"),
+        L("Exports go to Documents/NyayaLekh, visible to WPS Office immediately.", "निर्यात Documents/NyayaLekh में जाता है, WPS Office तुरंत देख सकता है।"),
+        L("Old .doc files: open in WPS Office and save as .docx first.", "पुरानी .doc फ़ाइलें: पहले WPS Office में खोलकर .docx सहेजें।")
+      ]],
+      [L("Shortcuts (with a keyboard)", "शॉर्टकट (कीबोर्ड सहित)"), [
+        "Ctrl/⌘ + B / I / U — " + L("bold, italic, underline", "बोल्ड, इटैलिक, अंडरलाइन"),
+        "Ctrl/⌘ + F — " + L("find & replace", "खोजें व बदलें"),
+        "Ctrl/⌘ + Z / Y — " + L("undo / redo", "पूर्ववत / दोहराएँ"),
+        "Ctrl/⌘ + S — " + L("save", "सहेजें"),
+        "Ctrl/⌘ + D — " + L("look up the selected word", "चयनित शब्द का अर्थ"),
+        "Esc — " + L("close panels and dialogs", "पैनल व संवाद बंद करें")
+      ]]
+    ];
+    return sections.map(function (s) {
+      return "<div class='section-title'>" + esc(s[0]) + "</div><div class='list'>" +
+        s[1].map(function (t) {
+          return "<div class='list-item' style='align-items:flex-start'><span class='grow'><small style='font-size:12.5px;color:var(--ink-2);line-height:1.6'>" + esc(t) + "</small></span></div>";
+        }).join("") + "</div>";
+    }).join("") + "<div class='section-title'>" + L("Support", "सहायता") + "</div>" +
+      "<p class='hint'>NyayaLekh v2.0 · " + L("Fully offline, no account, no tracking.", "पूर्णतः ऑफ़लाइन, कोई खाता नहीं, कोई ट्रैकिंग नहीं।") + "</p>";
+  };
+
+  /* ----------------------------------------------------------------- about */
+  PANELS.about = function () {
+    return "<div style='text-align:center;padding:8px 0 16px'><div class='brand-badge' style='width:56px;height:56px;font-size:24px;margin:0 auto 10px'>न्या</div>" +
+      "<strong style='font-size:17px'>NyayaLekh</strong><div class='hint'>" + L("Legal Drafting Suite · v2.0", "विधिक प्रारूपण सूट · v2.0") + "</div></div>" +
+      "<p class='hint'>" + L("A word processor built for Hindi legal drafting on Android tablets: paged A4/Legal writing, Devanagari and Latin font library, Rajasthan court templates, offline dictionary and spell check, Kruti Dev conversion and DOCX export.",
+        "Android टैबलेट पर हिन्दी विधिक प्रारूपण हेतु शब्द-संसाधक: A4/लीगल पृष्ठ, देवनागरी व लैटिन फ़ॉन्ट संग्रह, राजस्थान न्यायालय प्रारूप, ऑफ़लाइन शब्दकोश व वर्तनी जाँच, कृतिदेव रूपांतरण एवं DOCX निर्यात।") + "</p>" +
+      "<div class='section-title'>" + L("Credits", "श्रेय") + "</div>" +
+      "<div class='list'>" +
+      "<div class='list-item'><span class='grow'><strong>" + L("Fonts", "फ़ॉन्ट") + "</strong><small>SIL Open Font License 1.1 — " + ND.fonts.list.length + " " + L("families bundled", "परिवार सम्मिलित") + "</small></span></div>" +
+      "<div class='list-item'><span class='grow'><strong>" + L("Hindi WordNet", "हिन्दी वर्डनेट") + "</strong><small>CFILT, IIT Bombay · GPL — " + L("dictionary & spelling data", "शब्दकोश व वर्तनी डेटा") + "</small></span></div>" +
+      "<div class='list-item'><span class='grow'><strong>JSZip</strong><small>MIT — DOCX / ODT " + L("packaging", "पैकेजिंग") + "</small></span></div>" +
+      "<div class='list-item'><span class='grow'><strong>Kruti Dev mapping</strong><small>" + L("open legacy-to-Unicode tables", "खुली लीगेसी-यूनिकोड तालिकाएँ") + "</small></span></div>" +
+      "</div>" +
+      "<div class='section-title'>" + L("Privacy", "गोपनीयता") + "</div>" +
+      "<p class='hint'>" + L("No internet permission is required for drafting. Documents, dictionary lookups and dictation stay on the device.",
+        "प्रारूपण हेतु इंटरनेट की आवश्यकता नहीं। दस्तावेज़, शब्दकोश व डिक्टेशन डिवाइस पर ही रहते हैं।") + "</p>" +
+      "<p class='hint warn'>" + L("Statute cross-reference tables are study aids, not legal advice.", "संविधि तालिकाएँ केवल सहायक हैं, विधिक सलाह नहीं।") + "</p>";
+  };
 
   /* ==========================================================================
-   * wiring
+   * 6. IMPORT / EXPORT ACTIONS
    * ======================================================================== */
-  function wire() {
-    document.getElementById("btnMenu").addEventListener("click", function () {
-      var d = document.getElementById("drawer");
-      if (d.hidden) openDrawer(); else closeDrawer();
-    });
-    document.getElementById("scrim").addEventListener("click", closeDrawer);
-    document.getElementById("panelClose").addEventListener("click", closePanel);
-    document.getElementById("modalClose").addEventListener("click", closeModal);
-    document.getElementById("modal").addEventListener("click", function (e) {
-      if (e.target.id === "modal") closeModal();
-    });
-    document.getElementById("btnExport").addEventListener("click", function () { screenExport(current); });
-
-    document.querySelectorAll("[data-open]").forEach(function (b) {
-      b.addEventListener("click", function () {
-        openScreen(b.getAttribute("data-open"));
+  function doImport() {
+    ND.native.pickFile(function (name, base64) {
+      if (!name) return;
+      status(L("Importing ", "आयात हो रहा है ") + name);
+      D.importFile(name, base64).then(function (blocks) {
+        if (!blocks || !blocks.length) throw new Error(ND.t("unsupportedFile"));
+        var title = String(name).replace(/\.[^.]+$/, "");
+        var doc = D.newDoc({ title: title });
+        doc.blocks = blocks;
+        startDocument(doc);
+        saveDoc(true);
+        status(L("Imported ", "आयात हुआ ") + name);
+        closePanel();
+      }).catch(function (e) {
+        status((e && e.message) || L("Import failed", "आयात विफल"), "warn", 5000);
       });
     });
+  }
 
-    // ribbon commands
-    document.querySelectorAll("[data-cmd]").forEach(function (b) {
+  function exportAs(fmt) {
+    var doc = S.doc;
+    var name = U.safeName(doc.title || "document");
+    var finish = function (err, path) {
+      if (err) { status(L("Export failed", "निर्यात विफल") + ": " + err, "warn", 5000); return; }
+      status(ND.t("exportedTo", { path: path || name }), "ok", 4000);
+    };
+    if (fmt === "docx") {
+      status(L("Building DOCX…", "DOCX बन रहा है…"));
+      D.toDocxBlob(doc).then(function (blob) {
+        ND.native.saveToDocuments(name + ".docx",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document", blob, finish);
+      }).catch(function (e) { finish(e.message || String(e)); });
+      return;
+    }
+    if (fmt === "pdf") { printDoc(); return; }
+    if (fmt === "html") {
+      ND.native.saveToDocuments(name + ".html", "text/html", new Blob([D.toHtml(doc)], { type: "text/html" }), finish);
+      return;
+    }
+    if (fmt === "rtf") {
+      ND.native.saveToDocuments(name + ".rtf", "application/rtf", new Blob([D.toRtf(doc)], { type: "application/rtf" }), finish);
+      return;
+    }
+    if (fmt === "txt") {
+      ND.native.saveToDocuments(name + ".txt", "text/plain", new Blob([D.toText(doc)], { type: "text/plain" }), finish);
+      return;
+    }
+    if (fmt === "md") {
+      ND.native.saveToDocuments(name + ".md", "text/markdown", new Blob([D.toMarkdown(doc)], { type: "text/markdown" }), finish);
+    }
+  }
+
+  function printDoc() {
+    saveDoc(true);
+    if (ND.native.has()) {
+      ND.native.call("printPage");
+      status(L("Opening print dialog — choose “Save as PDF”.", "प्रिंट खुल रहा है — “PDF में सहेजें” चुनें।"), "ok", 5000);
+    } else {
+      window.print();
+    }
+  }
+
+  function copyWholeDoc() {
+    var text = D.plainText(S.doc);
+    U.copyText(text).then(function () { status(ND.t("copiedToClipboard")); });
+  }
+
+  /* ==========================================================================
+   * 7. EVENT WIRING
+   * ======================================================================== */
+  function bind() {
+    /* menu & rail */
+    on("btnMenu", "click", openSheet);
+    on("menuClose", "click", closeSheet);
+    on("scrim", "click", closeSheet);
+    on("panelClose", "click", closePanel);
+    on("menuLang", "click", function () { ND.toggleLang(); updateLangPills(); });
+    on("stLang", "click", function () { ND.toggleLang(); updateLangPills(); });
+
+    $$("#rail .rail-btn, #menuSheet [data-screen]").forEach(function (b) {
+      b.addEventListener("click", function () { go(b.getAttribute("data-screen")); });
+    });
+
+    /* app bar */
+    on("docTitle", "input", function () {
+      S.doc.title = this.value;
+      document.title = (S.doc.title || ND.t("appName")) + " · " + ND.t("appName");
+      saveDoc();
+    });
+    on("docTitle", "keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); this.blur(); } });
+    on("btnUndo", "click", function () { E.undo(); });
+    on("btnRedo", "click", function () { E.redo(); });
+    on("btnFind", "click", toggleFind);
+    on("btnFocus", "click", toggleFocus);
+    on("btnTheme", "click", function () {
+      var i = THEMES.indexOf(ND.prefs.theme || "light");
+      setTheme(THEMES[(i + 1) % THEMES.length]);
+      status(L("Theme: ", "थीम: ") + ND.prefs.theme);
+    });
+    on("btnExport", "click", function () { renderPanel("export"); });
+
+    /* toolbar */
+    on("selStyle", "change", function () { E.setBlockType(this.value); });
+    on("selSize", "change", function () {
+      setStyle("size", parseFloat(this.value) || 12);
+      ND.setPref("size", S.doc.style.size, { silent: true });
+    });
+    on("btnFonts", "click", function () { renderPanel("fonts"); });
+    on("btnSpacing", "click", spacingDialog);
+    on("btnClearFormat", "click", function () { E.clearFormat(); });
+    on("btnMoreFormat", "click", moreFormatDialog);
+    on("colorText", "input", function () { E.exec("foreColor", this.value); });
+    on("colorHighlight", "input", function () { E.exec("hiliteColor", this.value); });
+
+    $$("#toolbar [data-cmd]").forEach(function (b) {
       b.addEventListener("mousedown", function (e) { e.preventDefault(); });
-      b.addEventListener("click", function () {
-        var cmd = b.getAttribute("data-cmd");
-        E.exec(cmd);
-      });
+      b.addEventListener("click", function () { E.exec(b.getAttribute("data-cmd")); });
     });
-    document.querySelectorAll("[data-act]").forEach(function (b) {
+    $$("#toolbar [data-align]").forEach(function (b) {
+      b.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      b.addEventListener("click", function () { E.align(b.getAttribute("data-align")); });
+    });
+    $$("#toolbar [data-indent]").forEach(function (b) {
+      b.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      b.addEventListener("click", function () { E.indent(parseInt(b.getAttribute("data-indent"), 10)); });
+    });
+
+    /* status bar */
+    on("stZoomIn", "click", function () { applyZoom(S.zoom + 0.1); ND.setPref("zoom", S.zoom, { silent: true }); });
+    on("stZoomOut", "click", function () { applyZoom(S.zoom - 0.1); ND.setPref("zoom", S.zoom, { silent: true }); });
+    on("stZoom", "click", function () { applyZoom(1); ND.setPref("zoom", 1, { silent: true }); });
+    on("btnZen", "click", toggleFocus);
+
+    /* selection toolbar */
+    $$("#selTools [data-cmd]").forEach(function (b) {
+      b.addEventListener("mousedown", function (e) { e.preventDefault(); });
+      b.addEventListener("click", function () { E.exec(b.getAttribute("data-cmd")); });
+    });
+    $$("#selTools [data-act]").forEach(function (b) {
       b.addEventListener("mousedown", function (e) { e.preventDefault(); });
       b.addEventListener("click", function () {
         var act = b.getAttribute("data-act");
-        if (act === "indent") E.indent(1);
-        else if (act === "outdent") E.indent(-1);
-        else if (act === "clearFmt") E.clearFormat();
-        else if (act === "lineHeight") {
-          var v = prompt("पंक्ति अंतर (1.2 – 2.4)", String(current.style.lh));
-          if (v) E.lineHeight(parseFloat(v) || 1.65);
-        } else if (act === "para") {
-          openScreen("page");
-        }
-      });
-    });
-    document.querySelectorAll("[data-insert]").forEach(function (b) {
-      b.addEventListener("mousedown", function (e) { e.preventDefault(); });
-      b.addEventListener("click", function () {
-        var t = b.getAttribute("data-insert");
-        if (t === "h1" || t === "h2") E.setBlockType(t);
-        else if (t === "center") E.align("center");
-        else if (t === "right") E.align("right");
-        else if (t === "pagebreak") E.insertBlock("pagebreak");
-      });
-    });
-
-    document.getElementById("selFont").addEventListener("change", function () {
-      current.style.font = this.value;
-      E.setDoc(current); autosave();
-    });
-    document.getElementById("selSize").addEventListener("change", function () {
-      current.style.size = parseFloat(this.value);
-      E.setDoc(current); autosave();
-    });
-
-    document.getElementById("docTitle").addEventListener("change", function () {
-      current.title = this.value || "अनाम दस्तावेज़";
-      autosave();
-    });
-
-    document.getElementById("btnUndo").addEventListener("click", E.undo);
-    document.getElementById("btnRedo").addEventListener("click", E.redo);
-    document.getElementById("btnSearch").addEventListener("click", openFind);
-
-    document.getElementById("stLang").addEventListener("click", function () {
-      ND.i18n.toggle();
-      U.toast(ND.i18n.lang === "hi" ? "भाषा: हिन्दी" : "Language: English");
-    });
-    document.getElementById("stZoomIn").addEventListener("click", function () { setZoom((S.zoom || 1) + 0.1); });
-    document.getElementById("stZoomOut").addEventListener("click", function () { setZoom((S.zoom || 1) - 0.1); });
-    document.getElementById("stZoom").addEventListener("click", fitZoom);
-    document.getElementById("btnKeyboard").addEventListener("click", function () {
-      var el = document.querySelector(".blk");
-      if (el) el.focus();
-    });
-
-    // find bar
-    var findInput = document.getElementById("findInput");
-    findInput.addEventListener("input", U.debounce(function () {
-      findState.hits = E.find(findInput.value);
-      findState.idx = -1;
-      document.getElementById("findCount").textContent = findState.hits.length ? findState.hits.length + " मिले" : "0";
-      if (findState.hits.length) { findState.idx = E.gotoHit(0); }
-    }, 200));
-    document.getElementById("findNext").addEventListener("click", function () { findState.idx = E.gotoHit(findState.idx + 1); });
-    document.getElementById("findPrev").addEventListener("click", function () { findState.idx = E.gotoHit(findState.idx - 1); });
-    document.getElementById("findClose").addEventListener("click", closeFind);
-    findInput.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") closeFind();
-      if (e.key === "Enter") { findState.idx = E.gotoHit(findState.idx + (e.shiftKey ? -1 : 1)); }
-    });
-
-    // selection tools
-    document.querySelectorAll("#selTools button").forEach(function (b) {
-      b.addEventListener("mousedown", function (e) { e.preventDefault(); });
-      b.addEventListener("click", function () {
-        if (b.hasAttribute("data-cmd")) { E.exec(b.getAttribute("data-cmd")); }
-        else if (b.getAttribute("data-act") === "highlight") {
-          E.exec("hiliteColor", "#fef08a");
-        } else if (b.getAttribute("data-act") === "comment") {
-          var sel = window.getSelection();
-          var word = sel.toString().trim();
-          if (word) openScreen("dict", word);
+        if (act === "highlight") E.exec("hiliteColor", el("colorHighlight") ? el("colorHighlight").value : "#fde68a");
+        else if (act === "dict") {
+          var w = window.getSelection().toString().trim().split(/\s+/)[0] || "";
+          if (w) { S.dictQuery = w; S.dictResults = null; renderPanel("dictionary"); runDictLookup(w); }
         }
       });
     });
 
-    document.addEventListener("nd:docchange", function () {
-      updateStats();
-      setSaveState("saving");
-      autosave();
+    /* find bar */
+    on("findInput", "input", function () {
+      var hits = E.find(this.value);
+      var c = el("findCount");
+      if (c) c.textContent = hits.length ? "1/" + hits.length : "0";
+      if (hits.length) { E.gotoHit(0); if (c) c.textContent = (E.state.findIndex + 1) + "/" + hits.length; }
     });
-    document.addEventListener("nd:save", function () {
-      if (current) {
-        ND.store.put(JSON.parse(JSON.stringify(current))).then(function () {
-          U.toast("सहेजा गया", "ok", 1200);
-          setSaveState("saved");
-        });
-      }
+    on("findNext", "click", stepFind.bind(null, 1));
+    on("findPrev", "click", stepFind.bind(null, -1));
+    on("findClose", "click", closeFind);
+    on("replaceOne", "click", function () {
+      var q = el("findInput").value, r = el("replaceInput").value;
+      if (E.replaceCurrent(q, r)) { status(ND.t("replace")); el("findInput").dispatchEvent(new Event("input")); }
     });
-    document.addEventListener("nd:print", function () { doExport(current, "pdf"); });
-    document.addEventListener("nd:find", openFind);
-    document.addEventListener("nd:dict-selection", function () {
-      var sel = window.getSelection().toString().trim();
-      if (sel) openScreen("dict", sel);
-      else openScreen("dict");
-    });
-    document.addEventListener("nd:settings", function (e) {
-      if (!e.detail) return;
-      if (e.detail.key === "theme" || e.detail.key === "*") {
-        var th = S.theme;
-        document.documentElement.setAttribute("data-theme", th === "auto" ? "" : th);
-      }
+    on("replaceAll", "click", function () {
+      var q = el("findInput").value, r = el("replaceInput").value;
+      var n = E.replaceAll(q, r);
+      status(n ? n + " " + L("replaced", "बदले गए") : L("No matches", "कोई मेल नहीं"), n ? "ok" : "warn");
     });
 
-    window.addEventListener("resize", U.debounce(fitZoom, 300));
-    window.addEventListener("orientationchange", function () {
-      setTimeout(fitZoom, 350);
+    /* modal & key handling */
+    on("modalClose", "click", closeModal);
+    on("modal", "click", function (e) { if (e.target === this) closeModal(); });
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("nd:lang", onLangChange);
+    document.addEventListener("nd:docchange", onDocChange);
+    document.addEventListener("nd:dict-word", function (e) {
+      var w = (e.detail && e.detail.word) || "";
+      if (!w) return;
+      S.dictQuery = w;
+      S.dictResults = null;
+      renderPanel("dictionary");
+      runDictLookup(w);
     });
+    document.addEventListener("nd:pref", function (e) {
+      if (!e.detail || e.detail.key === "*") return;
+      if (e.detail.key === "pageView") { applyDocMeta(); }
+      if (e.detail.key === "autosave" || e.detail.key === "autoSpell" || e.detail.key === "ruler") applyDocMeta();
+    });
+    window.addEventListener("beforeunload", function () { saveDoc(true); });
 
-    // native voice result hook (Android RecognizerIntent)
-    global.NDVoiceResult = global.NDVoiceResult || function () {};
+    /* panel + modal delegation */
+    var body = el("panelBody");
+    if (body) {
+      body.addEventListener("click", onPanelClick);
+      body.addEventListener("change", onPanelChange);
+      body.addEventListener("input", onPanelInput);
+    }
+    el("modalBody").addEventListener("click", onPanelClick);
   }
+
+  function on(id, ev, fn) {
+    var node = el(id);
+    if (node) node.addEventListener(ev, fn);
+  }
+
+  function onKey(e) {
+    var mod = e.ctrlKey || e.metaKey;
+    if (e.key === "Escape") {
+      if (!el("modal").hidden) { closeModal(); return; }
+      if (!el("findbar").hidden) { closeFind(); return; }
+      if (!el("menuSheet").hidden) { closeSheet(); return; }
+      if (!el("sidePanel").hidden) { closePanel(); return; }
+    }
+    if (!mod) return;
+    var k = e.key.toLowerCase();
+    if (k === "f") { e.preventDefault(); toggleFind(); }
+    else if (k === "s") { e.preventDefault(); saveDoc(true); status(ND.t("saved")); }
+    else if (k === "p") { e.preventDefault(); printDoc(); }
+    else if (k === "e") { e.preventDefault(); renderPanel("export"); }
+    else if (k === "d" && !window.getSelection().toString()) { e.preventDefault(); renderPanel("dictionary"); }
+  }
+
+  function onLangChange() {
+    updateLangPills();
+    if (S.screen) renderPanel(S.screen);
+    syncTitle();
+    applyDocMeta();
+    updateStats();
+  }
+
+  function onDocChange() {
+    updateStats();
+    if (ND.prefs.autosave !== false) saveDoc();
+    else setSaveState(ND.t("unsaved"));
+  }
+
+  /* ----------------------------------------------------------------- panels */
+  function onPanelClick(e) {
+    var mark = e.target.closest ? e.target.closest("[data-act]") : null;
+    if (!mark) return;
+    var act = mark.getAttribute("data-act");
+    var ds = mark.dataset;
+
+    switch (act) {
+      case "new-doc": newDocument(); closePanel(); break;
+      case "import-file": doImport(); break;
+      case "open-doc": openDocument(ds.id); break;
+      case "rename-doc": renameDoc(ds.id); break;
+      case "delete-doc": deleteDoc(ds.id); break;
+      case "tplcat": S.tplCat = ds.cat; renderPanel("templates"); break;
+      case "use-tpl": applyTemplate(ds.tpl); break;
+      case "seg": handleSeg(mark); break;
+      case "ins": handleInsert(ds.what); break;
+      case "ins-table": handleInsert("table"); break;
+      case "symbol": E.insertTextAtCursor(ds.sym); break;
+      case "pickvar": E.insertTextAtCursor(ds.var); closeModal(); break;
+      case "toggle": togglePref(ds.pref, mark); break;
+      case "margin-preset": {
+        var m = D.MARGIN_PRESETS[ds.preset];
+        if (m) { S.doc.page.margins = Object.assign({}, m); E.rerender(); saveDoc(); renderPanel("layout"); }
+        break;
+      }
+      case "case": {
+        var mode = ds.mode;
+        transformSelection(function (t) {
+          if (mode === "upper") return t.toUpperCase();
+          if (mode === "lower") return t.toLowerCase();
+          if (mode === "title") return toTitleCase(t);
+          return toSentenceCase(t);
+        });
+        break;
+      }
+      case "fix-matras": fixMatrasEverywhere(); break;
+      case "smart-quotes": smartQuotesEverywhere(); break;
+      case "collapse-spaces": collapseSpaces(); status(L("Spaces tidied", "स्पेस साफ़ हुए")); break;
+      case "sort-lines": sortLines(); break;
+      case "translit": transformSelection(function (t) { return T.devanagariToRoman(t); }); break;
+      case "find": toggleFind(true); break;
+      case "select-all": selectAllDoc(); break;
+      case "stats": renderPanel("stats"); break;
+      case "spell-all": renderPanel("spell"); setTimeout(runSpell, 60); break;
+      case "dict-go": runDictLookup(el("dictInput").value); break;
+      case "dict-word": S.dictQuery = ds.word; renderPanel("dictionary"); runDictLookup(ds.word); break;
+      case "dict-insert": E.insertTextAtCursor(ds.word); status(L("Inserted", "जोड़ा गया")); break;
+      case "dict-save": ND.dict.addUserWord(ds.word); status(L("Added to dictionary", "शब्दकोश में जोड़ा")); break;
+      case "spell-run": runSpell(); break;
+      case "spell-live": ND.setPref("autoSpell", !ND.prefs.autoSpell); renderPanel("spell"); E.decorateSpelling(); break;
+      case "spell-fix": {
+        var it = (S.spellIssues || [])[parseInt(ds.i, 10)];
+        if (it) { replaceWord(it.word, ds.word); S.spellIssues.splice(parseInt(ds.i, 10), 1); renderPanel("spell"); }
+        break;
+      }
+      case "spell-add": {
+        var it2 = (S.spellIssues || [])[parseInt(ds.i, 10)];
+        if (it2) { ND.dict.addUserWord(it2.word); S.spellIssues.splice(parseInt(ds.i, 10), 1); renderPanel("spell"); }
+        break;
+      }
+      case "spell-goto": {
+        var it3 = (S.spellIssues || [])[parseInt(ds.i, 10)];
+        if (it3 && it3.blockId) E.gotoBlock(it3.blockId);
+        break;
+      }
+      case "ud-add": {
+        var v = (el("udInput") || {}).value || "";
+        if (v.trim()) { ND.dict.addUserWord(v.trim()); renderPanel("spell"); }
+        break;
+      }
+      case "ud-del": ND.dict.removeUserWord(ds.word); renderPanel("spell"); break;
+      case "voice-start": startVoice(); break;
+      case "voice-stop": stopVoice(); break;
+      case "voice-insert":
+        if (S.voiceText) { E.insertTextAtCursor(S.voiceText); S.voiceText = ""; paintVoice(); status(L("Inserted", "जोड़ा गया")); }
+        break;
+      case "voice-clear": S.voiceText = ""; paintVoice(); break;
+      case "conv-mode": S.convMode = ds.mode; renderPanel("convert"); break;
+      case "conv-run": runConvert(); break;
+      case "conv-insert": {
+        var out = el("convOut");
+        if (out && out.value) { E.insertTextAtCursor(out.value); status(L("Inserted", "जोड़ा गया")); }
+        break;
+      }
+      case "conv-copy": {
+        var o2 = el("convOut");
+        if (o2 && o2.value) U.copyText(o2.value).then(function () { status(ND.t("copiedToClipboard")); });
+        break;
+      }
+      case "conv-swap": {
+        var i3 = el("convIn"), o3 = el("convOut");
+        if (i3 && o3) { i3.value = o3.value; o3.value = ""; }
+        break;
+      }
+      case "legal-tab": S.legalTab = ds.tab; renderPanel("legal"); break;
+      case "open-court": renderPanel("court"); break;
+      case "open-fonts": renderPanel("fonts"); break;
+      case "open-stats": renderPanel("stats"); break;
+      case "open-help": renderPanel("help"); break;
+      case "open-about": renderPanel("about"); break;
+      case "open-convert": renderPanel("convert"); break;
+      case "set-font": {
+        var script = ds.script;
+        if (script === "dev") { S.doc.style.devFont = ds.font; ND.setPref("devFont", ds.font, { silent: true }); }
+        else { S.doc.style.latinFont = ds.font; ND.setPref("latinFont", ds.font, { silent: true }); }
+        E.rerender();
+        applyDocMeta();
+        saveDoc();
+        renderPanel("fonts");
+        break;
+      }
+      case "accent": ND.setPref("accent", ds.accent); applyTheme(); renderPanel("settings"); break;
+      case "reset-prefs":
+        openModal(L("Reset settings?", "सेटिंग्स रीसेट करें?"),
+          "<p class='hint'>" + L("Theme, fonts and preferences return to defaults. Documents are kept.",
+            "थीम, फ़ॉन्ट व प्राथमिकताएँ डिफ़ॉल्ट होंगी। दस्तावेज़ सुरक्षित रहेंगे।") + "</p>", [
+            { label: ND.t("cancel") },
+            {
+              label: ND.t("reset"), kind: "danger", onClick: function () {
+                ND.resetPrefs();
+                applyTheme(); applyZoom(1); applyDocMeta(); renderPanel("settings");
+                status(L("Settings reset", "सेटिंग्स रीसेट हुईं"));
+              }
+            }
+          ]);
+        break;
+      case "court-insert": E.insertTextAtCursor(D.courtName(S.doc)); status(L("Court heading inserted", "न्यायालय शीर्षक जोड़ा")); break;
+      case "court-fill": fillPlaceholders(); break;
+      case "export": exportAs(ds.fmt); break;
+      case "copy-doc": copyWholeDoc(); break;
+      case "share-doc": {
+        var text = D.plainText(S.doc);
+        if (ND.native.has()) {
+          var blob = new Blob([text], { type: "text/plain" });
+          var name = U.safeName(S.doc.title || "document") + ".txt";
+          ND.native.saveToDocuments(name, "text/plain", blob, function (err, path) {
+            if (!err) ND.native.call("shareFile", path);
+          });
+        } else {
+          U.copyText(text).then(function () { status(ND.t("copiedToClipboard")); });
+        }
+        break;
+      }
+      case "print-doc": printDoc(); break;
+    }
+  }
+
+  function handleSeg(btn) {
+    var ds = btn.dataset;
+    if (ds.langset) {
+      ND.setLang(ds.langset);
+      updateLangPills();
+      renderPanel(S.screen);
+    } else if (ds.lang) {
+      S.tplLang = ds.lang;
+      renderPanel("templates");
+    } else if (ds.pageview) {
+      ND.setPref("pageView", ds.pageview);
+      applyDocMeta();
+      renderPanel("layout");
+    } else if (ds.cols) {
+      setPage("columns", parseInt(ds.cols, 10));
+      renderPanel("layout");
+    } else if (ds.theme) {
+      setTheme(ds.theme);
+      renderPanel("settings");
+    } else if (ds.zoom) {
+      applyZoom(parseFloat(ds.zoom));
+      ND.setPref("zoom", S.zoom, { silent: true });
+      renderPanel("layout");
+    }
+  }
+
+  function togglePref(pref, btn) {
+    if (pref === "__page_numbers") {
+      setPage("numbers", !(S.doc.page.numbers !== false));
+    } else if (pref === "__line_numbers") {
+      setPage("lineNumbers", !S.doc.page.lineNumbers);
+    } else if (pref === "__page_border") {
+      setPage("border", !S.doc.page.border);
+    } else {
+      ND.setPref(pref, !ND.prefs[pref]);
+      if (pref === "showMarks" || pref === "ruler" || pref === "statusBar" || pref === "typewriter") applyDocMeta();
+    }
+    btn.classList.toggle("on");
+    btn.setAttribute("aria-checked", String(btn.classList.contains("on")));
+    renderPanel(S.screen);
+  }
+
+  function onPanelChange(e) {
+    var t = e.target;
+    var v = t.type === "checkbox" ? t.checked : t.value;
+    if (t.dataset.page) {
+      var val = t.dataset.page === "numbers" ? t.checked : v;
+      if (["size", "orientation", "headerText", "footerText", "watermark", "numberFormat"].indexOf(t.dataset.page) >= 0) {
+        setPage(t.dataset.page, val);
+      } else {
+        setPage(t.dataset.page, val);
+      }
+    } else if (t.dataset.margin) {
+      if (!S.doc.page.margins) S.doc.page.margins = {};
+      S.doc.page.margins[t.dataset.margin] = parseFloat(v) || 25.4;
+      E.rerender();
+      saveDoc();
+    } else if (t.dataset.style) {
+      setStyle(t.dataset.style, t.dataset.style === "firstLine" ? Number(v) : v);
+      if (t.dataset.style === "size") ND.setPref("size", S.doc.style.size, { silent: true });
+    } else if (t.dataset.court) {
+      S.doc.court[t.dataset.court] = v;
+      if (t.dataset.court === "type" || t.dataset.court === "place" || t.dataset.court === "name") renderPanel("court");
+      saveDoc();
+    } else if (t.dataset.pref) {
+      ND.setPref(t.dataset.pref, v);
+      if (S.doc) { E.rerender(); applyDocMeta(); }
+    } else if (t.id === "convFont") {
+      S.convFont = v;
+    }
+  }
+
+  function onPanelInput(e) {
+    var t = e.target;
+    if (t.id === "fileSearch") { S.fileQuery = t.value; paintFiles(); }
+    else if (t.id === "dictInput") { runDictLookup(t.value); }
+    else if (t.id === "legalSearch") {
+      S.legalQuery = t.value;
+      var box = el("panelBody");
+      var scroll = box ? box.scrollTop : 0;
+      renderPanel("legal");
+      if (box) box.scrollTop = scroll;
+      var i = el("legalSearch");
+      if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
+    } else if (t.id === "fontSearch") {
+      S.fontQuery = t.value;
+      renderPanel("fonts");
+      var f = el("fontSearch");
+      if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+    } else if (t.dataset.pageRange === "watermarkOpacity") {
+      S.doc.page.watermarkOpacity = parseFloat(t.value) / 100;
+      var wm = el("wmVal");
+      if (wm) wm.textContent = t.value + "%";
+      E.rerender();
+      saveDoc();
+    } else if (t.dataset.prefnum) {
+      ND.setPref(t.dataset.prefnum, parseFloat(t.value), { silent: true });
+    }
+  }
+
+  function openDocument(id) {
+    ND.store.get(id).then(function (doc) {
+      if (!doc) { status(L("Document not found", "दस्तावेज़ नहीं मिला"), "warn"); return; }
+      startDocument(doc);
+      ND.store.kvSet("current", id);
+      if (window.innerWidth < 900) closePanel();
+    });
+  }
+
+  function renameDoc(id) {
+    ND.store.get(id).then(function (doc) {
+      if (!doc) return;
+      promptModal(L("Rename document", "दस्तावेज़ का नाम बदलें"), L("Title", "शीर्षक"), doc.title || "", function (v) {
+        doc.title = v.trim() || ND.t("untitled");
+        doc.updatedAt = Date.now();
+        ND.store.put(doc).then(function () {
+          if (S.doc && S.doc.id === id) { S.doc.title = doc.title; syncTitle(); }
+          renderPanel("files");
+        });
+      });
+    });
+  }
+
+  function deleteDoc(id) {
+    openModal(L("Delete document?", "दस्तावेज़ हटाएँ?"),
+      "<p class='hint'>" + L("This cannot be undone.", "यह पूर्ववत नहीं होगा।") + "</p>", [
+        { label: ND.t("cancel") },
+        {
+          label: ND.t("delete"), kind: "danger", onClick: function () {
+            ND.store.del(id).then(function () {
+              status(L("Document deleted", "दस्तावेज़ हटाया"));
+              if (S.doc && S.doc.id === id) {
+                ND.store.all().then(function (arr) {
+                  if (arr && arr.length) startDocument(arr[0]);
+                  else newDocument();
+                });
+              }
+              renderPanel("files");
+            });
+          }
+        }
+      ]);
+  }
+
+  function selectAllDoc() {
+    var sel = window.getSelection();
+    var range = document.createRange();
+    range.selectNodeContents(E.state.pagesEl);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  /* ------------------------------------------------------------- find/focus */
+  function toggleFind(force) {
+    var bar = el("findbar");
+    if (!bar) return;
+    var show = force === true ? true : bar.hidden;
+    bar.hidden = !show;
+    if (show) {
+      var i = el("findInput");
+      if (i) { i.focus(); i.select(); }
+    } else closeFind();
+  }
+  function closeFind() {
+    var bar = el("findbar");
+    if (bar) bar.hidden = true;
+    var i = el("findInput");
+    if (i && i.value) { i.value = ""; E.find(""); var c = el("findCount"); if (c) c.textContent = ""; }
+  }
+  function stepFind(dir) {
+    var q = el("findInput").value;
+    if (!q) return;
+    if (!E.state.findHits.length || E.state.findHits[0].id !== undefined) E.find(q);
+    var n = E.gotoHit(E.state.findIndex + dir);
+    var c = el("findCount");
+    if (c) c.textContent = (n + 1) + "/" + E.state.findHits.length;
+  }
+
+  function toggleFocus() {
+    var onNow = !ND.prefs.focus;
+    ND.setPref("focus", onNow);
+    document.body.classList.toggle("focus-mode", onNow);
+    var b = el("btnFocus");
+    if (b) b.classList.toggle("on", onNow);
+    status(onNow ? L("Focus mode on", "फ़ोकस मोड चालू") : L("Focus mode off", "फ़ोकस मोड बंद"));
+  }
+
+  /* --------------------------------------------------------------- dialogs */
+  function spacingDialog() {
+    var st = S.doc.style;
+    var body = "<div class='field'><label>" + L("Line height", "पंक्ति ऊँचाई") + "</label><div class='row'>" +
+      [1, 1.15, 1.5, 1.65, 2].map(function (v) {
+        return "<button class='btn " + (Math.abs((st.lh || 1.65) - v) < 0.01 ? "primary" : "") + "' data-sp='" + v + "' onclick=\"ND.app.setLineHeight(" + v + ")\">" + v + "</button>";
+      }).join("") + "</div></div>" +
+      "<div class='field'><label>" + L("Paragraph gap", "अनुच्छेद अंतर") + "</label><div class='row'>" +
+      [0, 4, 6, 10, 14].map(function (v) {
+        return "<button class='btn " + ((st.paraSpacing === undefined ? 6 : st.paraSpacing) === v ? "primary" : "") + "' onclick=\"ND.app.setParaGap(" + v + ")\">" + v + " pt</button>";
+      }).join("") + "</div></div>";
+    openModal(L("Spacing", "रिक्ति"), body, [{ label: ND.t("close") }]);
+  }
+
+  A.setLineHeight = function (v) { E.setParagraph({ lh: v }); closeModal(); };
+  A.setParaGap = function (v) { E.setParagraph({ paraSpacing: v }); closeModal(); };
+
+  function moreFormatDialog() {
+    var body = "<div class='grid-2'>" +
+      "<button class='btn' onclick=\"ND.editor.exec('superscript');ND.app.closeModal()\">x² " + L("Superscript", "सुपरस्क्रिप्ट") + "</button>" +
+      "<button class='btn' onclick=\"ND.editor.exec('subscript');ND.app.closeModal()\">x₂ " + L("Subscript", "सबस्क्रिप्ट") + "</button>" +
+      "<button class='btn' onclick=\"ND.editor.exec('justifyFull')\">" + L("Fully justify", "पूर्ण संरेखण") + "</button>" +
+      "<button class='btn' onclick=\"ND.editor.applyToSelection(function(){document.execCommand('insertHTML',false,'<mark>'+window.getSelection()+'</mark>')})\">" + L("Highlight", "हाइलाइट") + "</button>" +
+      "<button class='btn' onclick=\"ND.app.setBlockFromDialog('quote')\">" + L("Quotation", "उद्धरण") + "</button>" +
+      "<button class='btn' onclick=\"ND.app.setBlockFromDialog('signature')\">" + L("Signature block", "हस्ताक्षर खंड") + "</button>" +
+      "<button class='btn' onclick=\"ND.editor.insertBlock('hr','');ND.app.closeModal()\">" + L("Divider", "विभाजक") + "</button>" +
+      "<button class='btn' onclick=\"ND.app.insertPageBreak()\">" + L("Page break", "पृष्ठ विराम") + "</button>" +
+      "</div>";
+    openModal(L("More formatting", "अधिक फ़ॉर्मैटिंग"), body, [{ label: ND.t("close") }]);
+  }
+
+  A.closeModal = closeModal;
+  A.setBlockFromDialog = function (t) { E.setBlockType(t); closeModal(); };
+  A.insertPageBreak = function () { E.insertBlock("pagebreak", ""); closeModal(); };
 
   /* ==========================================================================
-   * boot
+   * 8. BOOT
    * ======================================================================== */
   function boot() {
-    ND.i18n.init();
-    ND.settings.load().then(function () {
-      document.documentElement.setAttribute("data-theme", S.theme === "auto" ? "" : S.theme);
-      wire();
-      ND.store.all().then(function (docs) {
-        var doc;
-        if (docs && docs.length) doc = docs[0];
-        else doc = D.newDoc();
-        loadDoc(doc);
-        if (!docs || !docs.length) ND.store.put(doc);
-        hideSplash();
-        setTimeout(function () {
-          ND.dict.load().then(function () {
-            E.decorateSpelling();
-            var msg = document.getElementById("splashMsg");
-            if (msg) msg.textContent = "तैयार";
-          });
-        }, 400);
-      }).catch(function () {
-        loadDoc(D.newDoc());
-        hideSplash();
-      });
+    ND.loadPrefs();
+    ND.initLang();
+    ND.fonts.init();
+    applyTheme();
+    applyZoom(ND.prefs.zoom || 1);
+    updateLangPills();
+    bind();
+
+    if (ND.prefs.focus) document.body.classList.add("focus-mode");
+
+    var splashMsg = el("splashMsg");
+    if (splashMsg) splashMsg.textContent = L("Loading dictionaries and fonts…", "शब्दकोश व फ़ॉन्ट लोड हो रहे हैं…");
+
+    ND.dict.load().then(function () {
+      S.dictReady = true;
+      if (splashMsg) splashMsg.textContent = L("Ready", "तैयार");
+    }).catch(function () {
+      S.dictReady = false;
     });
-    // safety: never leave the splash up
-    setTimeout(hideSplash, 6000);
+
+    loadInitial().then(function (doc) {
+      startDocument(doc || D.newDoc({}));
+      S.ready = true;
+      setTimeout(function () {
+        var s = el("splash");
+        if (s) { s.classList.add("gone"); setTimeout(function () { s.style.display = "none"; }, 420); }
+      }, 260);
+      if (!doc) {
+        setTimeout(function () {
+          var first = document.querySelector("#pages .blk");
+          if (first) first.focus();
+        }, 500);
+      }
+    }).catch(function (e) {
+      console.error("boot failed", e);
+      startDocument(D.newDoc({}));
+      var s = el("splash");
+      if (s) s.style.display = "none";
+    });
+
+    /* reflow fonts when they finish loading */
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function () { if (S.doc) E.rerender(); });
+    }
   }
 
-  function hideSplash() {
-    var s = document.getElementById("splash");
-    if (!s || s.classList.contains("gone")) return;
-    s.classList.add("gone");
-    setTimeout(function () { s.remove(); }, 400);
-  }
-
-  A.boot = boot;
-  document.addEventListener("DOMContentLoaded", boot);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
 })(window);

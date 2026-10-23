@@ -21,3 +21,7 @@ android/.idea/
 # os
 .DS_Store
 Thumbs.db
+
+# font pipeline scratch space (scripts/build-fonts.mjs)
+scripts/.fonts-work/
+out/

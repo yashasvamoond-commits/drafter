@@ -272,9 +272,16 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         web.evaluateJavascript(
-                "(function(){var m=document.getElementById('modal'),d=document.getElementById('drawer'),s=document.getElementById('sidePanel');" +
+                "(function(){" +
+                "var m=document.getElementById('modal')," +
+                "sh=document.getElementById('menuSheet')," +
+                "d=document.getElementById('drawer')," +
+                "f=document.getElementById('findbar')," +
+                "s=document.getElementById('sidePanel');" +
                 "if(m&&!m.hidden){document.getElementById('modalClose').click();return 'handled';}" +
+                "if(sh&&!sh.hidden){document.getElementById('menuClose').click();return 'handled';}" +
                 "if(d&&!d.hidden){document.getElementById('scrim').click();return 'handled';}" +
+                "if(f&&!f.hidden){document.getElementById('findClose').click();return 'handled';}" +
                 "if(s&&!s.hidden){document.getElementById('panelClose').click();return 'handled';}" +
                 "return 'exit';})()",
                 value -> {
@@ -306,7 +313,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String getVersion() {
-            return "1.0.0";
+            return "2.0.0";
         }
 
         @JavascriptInterface

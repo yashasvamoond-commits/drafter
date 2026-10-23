@@ -32,6 +32,12 @@ jobs:
           node build-data.mjs
           ls -lh ../app/data
 
+      - name: Build font library (62 families, offline woff2)
+        run: |
+          node scripts/build-fonts.mjs
+          echo "faces: $(ls app/vendor/fonts/*.woff2 | wc -l)"
+          du -sh app/vendor/fonts app/js/fonts.js app/css/fonts.css
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -67,20 +73,24 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p out
-          cp android/app/build/outputs/apk/debug/app-debug.apk out/NyayaLekh-1.0.0.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk out/NyayaLekh-2.0.0.apk
           ls -lh out
 
       - name: Verify APK contents
         run: |
           python3 - <<'PY'
           import zipfile, sys
-          apk = "out/NyayaLekh-1.0.0.apk"
+          apk = "out/NyayaLekh-2.0.0.apk"
           z = zipfile.ZipFile(apk)
           names = set(z.namelist())
           required = [
             "AndroidManifest.xml",
             "assets/index.html",
             "assets/css/app.css",
+            "assets/css/fonts.css",
+            "assets/js/core.js",
+            "assets/js/i18n.js",
+            "assets/js/fonts.js",
             "assets/js/app.js",
             "assets/js/editor.js",
             "assets/js/doc.js",
@@ -91,11 +101,25 @@ jobs:
             "assets/data/hi-words.js",
             "assets/data/hi-dict.js",
             "assets/data/en-words.js",
-            "assets/vendor/fonts/serif-400.woff2",
-            "assets/vendor/fonts/sans-700.woff2",
-            "assets/vendor/fonts/tiro-400.woff2",
             "assets/vendor/jszip.min.js",
+            "assets/vendor/fonts/noto-serif-dev-400.woff2",
+            "assets/vendor/fonts/noto-serif-dev-700.woff2",
+            "assets/vendor/fonts/noto-sans-dev-400.woff2",
+            "assets/vendor/fonts/tiro-dev-400.woff2",
+            "assets/vendor/fonts/mukta-400.woff2",
+            "assets/vendor/fonts/kalam-400.woff2",
+            "assets/vendor/fonts/tinos-400.woff2",
+            "assets/vendor/fonts/arimo-700.woff2",
+            "assets/vendor/fonts/eb-garamond-400.woff2",
+            "assets/vendor/fonts/inter-400.woff2",
+            "assets/vendor/fonts/courier-prime-400.woff2",
           ]
+          faces = [n for n in names if n.startswith("assets/vendor/fonts/") and n.endswith(".woff2")]
+          families = sorted({n.rsplit("-", 1)[0] for n in faces})
+          print(f"font faces: {len(faces)}, families: {len(families)}")
+          if len(faces) < 100 or len(families) < 45:
+              print("FONT LIBRARY TOO SMALL:", len(faces), "faces /", len(families), "families")
+              sys.exit(1)
           missing = [r for r in required if r not in names]
           print(f"APK size: {z.fp.seek(0, 2) or 0}")
           for r in required:
@@ -103,14 +127,17 @@ jobs:
                   print(f"  OK  {r:45s} {z.getinfo(r).file_size:>9,} bytes")
           if missing:
               print("MISSING:", missing); sys.exit(1)
-          print(f"\nAll {len(required)} required assets present.")
+          html = z.read("assets/index.html").decode("utf-8", "replace")
+          if "js/fonts.js" not in html or "css/fonts.css" not in html:
+              print("index.html does not load the generated font library"); sys.exit(1)
+          print(f"\nAll {len(required)} required assets present; index.html wires fonts.")
           PY
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: NyayaLekh-APK
-          path: out/NyayaLekh-1.0.0.apk
+          path: out/NyayaLekh-2.0.0.apk
           retention-days: 90
 
       - name: Publish direct download (GitHub Release)
@@ -118,7 +145,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete apk-latest --yes --cleanup-tag >/dev/null 2>&1 || true
-          gh release create apk-latest out/NyayaLekh-1.0.0.apk \
-            --title "न्यायलेख — NyayaLekh APK (latest build)" \
-            --notes "Installable APK for Android 7.0+ (Lenovo Yoga Tab and other tablets). Works fully offline. Built from ${GITHUB_SHA}."
-          echo "Download: https://github.com/${GITHUB_REPOSITORY}/releases/download/apk-latest/NyayaLekh-1.0.0.apk"
+          gh release create apk-latest out/NyayaLekh-2.0.0.apk \
+            --title "NyayaLekh 2.0 — APK (latest build)" \
+            --notes "Installable APK for Android 7.0+ (Lenovo Yoga Tab Plus and other tablets). English + Hindi interface, 62 offline font families, Rajasthan court templates, DOCX export. Built from ${GITHUB_SHA}."
+          echo "Download: https://github.com/${GITHUB_REPOSITORY}/releases/download/apk-latest/NyayaLekh-2.0.0.apk"
